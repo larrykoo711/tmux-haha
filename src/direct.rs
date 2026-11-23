@@ -12,14 +12,16 @@ pub enum Target {
 }
 
 /// The session named exactly `wanted`, else the one named as tmux would
-/// take `wanted` ("my notes" → `my-notes`), else a new one with that name.
-/// Never a prefix match: `foo` does not mean `foo-bar`.
-pub fn resolve(sessions: &[SessionInfo], wanted: &str) -> Target {
+/// take `wanted` ("my notes" → `my-notes`), else that name with this
+/// machine's prefix (`box_my-notes`) when there is one, else a new session
+/// named as ta names new ones. Never a prefix match: `foo` is not `foo-bar`.
+pub fn resolve(sessions: &[SessionInfo], wanted: &str, host: Option<&str>) -> Target {
     let clean = naming::sanitize(wanted);
-    [wanted, clean.as_str()]
+    let prefixed = naming::session_name(host, wanted);
+    [wanted, clean.as_str(), prefixed.as_str()]
         .iter()
         .find_map(|name| sessions.iter().find(|s| s.name == *name))
-        .map_or(Target::Create(clean.clone()), |s| {
+        .map_or(Target::Create(prefixed.clone()), |s| {
             Target::Existing(s.id.clone())
         })
 }
@@ -42,14 +44,17 @@ mod tests {
     #[test]
     fn direct_prefers_exact_existing_session() {
         let sessions = [session("$1", "foo-bar"), session("$2", "foo")];
-        assert_eq!(resolve(&sessions, "foo"), Target::Existing("$2".into()));
+        assert_eq!(
+            resolve(&sessions, "foo", None),
+            Target::Existing("$2".into())
+        );
     }
 
     #[test]
     fn sanitized_name_matches_existing() {
         let sessions = [session("$4", "my-notes")];
         assert_eq!(
-            resolve(&sessions, "my notes"),
+            resolve(&sessions, "my notes", None),
             Target::Existing("$4".into())
         );
     }
@@ -57,7 +62,28 @@ mod tests {
     #[test]
     fn absent_means_create() {
         let sessions = [session("$1", "foo-bar")];
-        assert_eq!(resolve(&sessions, "foo"), Target::Create("foo".into()));
-        assert_eq!(resolve(&[], "a b"), Target::Create("a-b".into()));
+        assert_eq!(
+            resolve(&sessions, "foo", None),
+            Target::Create("foo".into())
+        );
+        assert_eq!(resolve(&[], "a b", None), Target::Create("a-b".into()));
+    }
+
+    #[test]
+    fn prefixed_name_is_found() {
+        let sessions = [session("$5", "box_work")];
+        assert_eq!(
+            resolve(&sessions, "work", Some("box")),
+            Target::Existing("$5".into())
+        );
+        assert_eq!(
+            resolve(&sessions, "api", Some("box")),
+            Target::Create("box_api".into())
+        );
+        // Without a prefix configured, `work` is a new session.
+        assert_eq!(
+            resolve(&sessions, "work", None),
+            Target::Create("work".into())
+        );
     }
 }

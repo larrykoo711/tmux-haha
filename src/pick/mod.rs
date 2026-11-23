@@ -34,7 +34,7 @@ fn now_ms() -> i64 {
 }
 
 /// Open the picker; then go where it was asked to.
-pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket) -> Result<()> {
+pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket, host: Option<&str>) -> Result<()> {
     let here = tmux.current_session(
         std::env::var("TMUX").ok().as_deref(),
         std::env::var("TMUX_PANE").ok().as_deref(),
@@ -57,10 +57,7 @@ pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket) -> Result<()> {
     match action {
         Action::Attach(id) => crate::enter::enter(tmux, socket, &id),
         Action::New { name } => {
-            let desired = match name {
-                Some(n) => naming::sanitize(&n),
-                None => naming::short_name(&cwd),
-            };
+            let desired = naming::new_session_name(name.as_deref(), &cwd, host);
             let (id, _) = crate::create(tmux, &desired, &cwd)?;
             crate::enter::enter(tmux, socket, &id)
         }

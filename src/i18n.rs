@@ -44,11 +44,30 @@ pub fn detect(
         .unwrap_or(Lang::En)
 }
 
+/// The config file's `language`, set once before anything is printed.
+#[cfg(not(test))]
+static CONFIG: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Hand over the config file's `language` (call before the first [`lang`]).
+#[cfg(not(test))]
+pub fn set_config_language(language: Option<String>) {
+    let _ = CONFIG.set(language);
+}
+
+#[cfg(test)]
+pub fn set_config_language(_: Option<String>) {}
+
 /// The language for this process, decided on first use.
 #[cfg(not(test))]
 pub fn lang() -> Lang {
     static LANG: std::sync::OnceLock<Lang> = std::sync::OnceLock::new();
-    *LANG.get_or_init(|| detect(None, &|k| std::env::var(k).ok(), &system_language))
+    *LANG.get_or_init(|| {
+        detect(
+            CONFIG.get().and_then(|c| c.as_deref()),
+            &|k| std::env::var(k).ok(),
+            &system_language,
+        )
+    })
 }
 
 /// Tests speak English unless they ask otherwise.
