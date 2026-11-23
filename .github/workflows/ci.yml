@@ -56,6 +56,16 @@ jobs:
       - run: tmux -V
       - run: cargo test --all --locked
 
+  formula:
+    name: Homebrew formula renders
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: |
+          packaging/homebrew/render.sh v9.9.9 packaging/homebrew/testdata/SHA256SUMS > "$RUNNER_TEMP/tmux-haha.rb"
+          ruby -c "$RUNNER_TEMP/tmux-haha.rb"
+          grep -q 'bin.install "ta"' "$RUNNER_TEMP/tmux-haha.rb"
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
