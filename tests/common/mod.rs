@@ -1,8 +1,12 @@
+// Each test file uses only some of these helpers.
+#![allow(dead_code)]
+
 //! A private tmux server and a temporary HOME per test: never the user's tmux.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, Instant};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
 
@@ -49,6 +53,70 @@ impl World {
         cmd
     }
 
+    /// `tmux -L <private socket> <args>`; stdout.
+    pub fn tmux(&self, args: &[&str]) -> String {
+        let out = Command::new("tmux")
+            .args(["-L", &self.socket])
+            .args(args)
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// Run the picker in a 120×30 session called `driver` on the private
+    /// server, as a person would in a terminal; wait until it has drawn.
+    pub fn start_picker(&self, cwd: &Path) {
+        let ta = env!("CARGO_BIN_EXE_ta");
+        let home = self.home();
+        let status = Command::new("tmux")
+            .args([
+                "-L",
+                &self.socket,
+                "new-session",
+                "-d",
+                "-s",
+                "driver",
+                "-x",
+                "120",
+                "-y",
+                "30",
+                "-c",
+            ])
+            .arg(cwd)
+            .arg("env")
+            .arg(format!("TA_TMUX_SOCKET={}", self.socket))
+            .arg("TA_LANG=en")
+            .arg(format!("HOME={}", home.display()))
+            .arg(ta)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        self.wait_for_screen(|s| s.contains("Find a session"));
+    }
+
+    /// What the picker's pane shows.
+    pub fn screen(&self) -> String {
+        self.tmux(&["capture-pane", "-p", "-t", "driver"])
+    }
+
+    pub fn wait_for_screen(&self, ok: impl Fn(&str) -> bool) -> String {
+        wait_for(|| Some(self.screen()).filter(|s| ok(s)))
+    }
+
+    /// Press keys in the picker (`Down`, `Enter`, …).
+    pub fn keys(&self, keys: &[&str]) {
+        for k in keys {
+            self.tmux(&["send-keys", "-t", "driver", k]);
+            std::thread::sleep(Duration::from_millis(60));
+        }
+    }
+
+    /// Type text into the picker.
+    pub fn type_text(&self, text: &str) {
+        self.tmux(&["send-keys", "-t", "driver", "-l", text]);
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
     pub fn session_names(&self) -> Vec<String> {
         let out = Command::new("tmux")
             .args(["-L", &self.socket, "list-sessions", "-F", "#{session_name}"])
@@ -89,4 +157,16 @@ pub fn stdout(out: &Output) -> String {
 
 pub fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// `f`'s answer, once it has one; panics after 10 seconds.
+pub fn wait_for<T>(mut f: impl FnMut() -> Option<T>) -> T {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(v) = f() {
+            return v;
+        }
+        assert!(Instant::now() < deadline, "timed out");
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

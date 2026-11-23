@@ -247,6 +247,38 @@ impl<R: Runner> Tmux<R> {
             })
     }
 
+    /// Rename by session id (`$N`), never by name, so it cannot hit another session.
+    pub fn rename_session(&self, session_id: &str, new_name: &str) -> Result<()> {
+        self.run(&["rename-session", "-t", session_id, new_name])
+            .map(drop)
+    }
+
+    /// End session `$N` (its programs get SIGHUP). By id, never by name.
+    pub fn kill_session(&self, session_id: &str) -> Result<()> {
+        self.run(&["kill-session", "-t", session_id]).map(drop)
+    }
+
+    /// The session this process runs in (`$N`), when it runs inside tmux on
+    /// this server: `tmux_env` and `pane` are the inherited `TMUX` and `TMUX_PANE`.
+    pub fn current_session(&self, tmux_env: Option<&str>, pane: Option<&str>) -> Option<String> {
+        let pane = pane.filter(|p| p.starts_with('%'))?;
+        if !self.matches_client(tmux_env?) {
+            return None;
+        }
+        let out = self
+            .run(&[
+                "display-message",
+                "-p",
+                "-t",
+                pane,
+                "#{pane_id}|:|#{session_id}",
+            ])
+            .ok()?;
+        // display-message falls back to the current pane for a gone target.
+        let (id, session) = out.trim_end().split_once(SEP)?;
+        (id == pane && session.starts_with('$')).then(|| session.to_string())
+    }
+
     /// Every session; empty when no server runs.
     pub fn sessions(&self) -> Vec<SessionInfo> {
         let Ok(out) = self.run(&["list-sessions", "-F", SESSION_FORMAT]) else {
@@ -259,6 +291,77 @@ impl<R: Runner> Tmux<R> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+
+    /// Records each command and answers from a script, in order.
+    struct Fake {
+        calls: RefCell<Vec<Vec<String>>>,
+        answers: RefCell<Vec<Result<String, String>>>,
+    }
+
+    impl Fake {
+        fn new(answers: &[Result<&str, &str>]) -> Self {
+            Fake {
+                calls: RefCell::default(),
+                answers: RefCell::new(
+                    answers
+                        .iter()
+                        .rev()
+                        .map(|a| a.map(String::from).map_err(String::from))
+                        .collect(),
+                ),
+            }
+        }
+    }
+
+    impl Runner for &Fake {
+        fn run(&self, args: &[String]) -> Result<String> {
+            self.calls.borrow_mut().push(args.to_vec());
+            match self.answers.borrow_mut().pop() {
+                Some(Ok(out)) => Ok(out),
+                Some(Err(e)) => bail!(e),
+                None => Ok(String::new()),
+            }
+        }
+    }
+
+    #[test]
+    fn rename_and_kill_target_ids() {
+        let fake = Fake::new(&[]);
+        let tmux = Tmux::new(&fake);
+        tmux.rename_session("$3", "new").unwrap();
+        tmux.kill_session("$4").unwrap();
+        let calls = fake.calls.borrow();
+        assert_eq!(calls[0], ["rename-session", "-t", "$3", "new"]);
+        assert_eq!(calls[1], ["kill-session", "-t", "$4"]);
+    }
+
+    #[test]
+    fn current_session_from_pane() {
+        let here = "/tmp/tmux-1/default,42,0";
+        let fake = Fake::new(&[Ok("/tmp/tmux-1/default|:|42\n"), Ok("%7|:|$2\n")]);
+        let tmux = Tmux::new(&fake);
+        assert_eq!(
+            tmux.current_session(Some(here), Some("%7")),
+            Some("$2".into())
+        );
+        // Another server: not "here".
+        let fake = Fake::new(&[Ok("/tmp/tmux-1/other|:|9\n")]);
+        assert_eq!(
+            Tmux::new(&fake).current_session(Some(here), Some("%7")),
+            None
+        );
+        // A pane that is gone: tmux answers for another pane.
+        let fake = Fake::new(&[Ok("/tmp/tmux-1/default|:|42\n"), Ok("%1|:|$0\n")]);
+        assert_eq!(
+            Tmux::new(&fake).current_session(Some(here), Some("%7")),
+            None
+        );
+        // Outside tmux.
+        let fake = Fake::new(&[]);
+        assert_eq!(Tmux::new(&fake).current_session(None, None), None);
+        assert!(fake.calls.borrow().is_empty());
+    }
 
     #[test]
     fn socket_values() {

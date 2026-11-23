@@ -5,11 +5,13 @@
 `ta`: one small command to find, start and switch tmux sessions.
 
 ```sh
+ta               # open the picker: type to search, ↑↓ to move, ↵ to go, → to rename or close, esc to quit
 ta api-review    # go to that session, or start it in this folder and go there
 ta new           # start a session in this folder, named after it (-2, -3… if taken)
 ta ls            # list sessions (* means a terminal is attached)
 ```
 
+- In the picker, ↵ on a search with no match starts a session with that name. Closing a session asks first (Keep is the default), and the session you are in can't be closed from there.
 - Inside tmux it switches to the session; outside tmux it attaches.
 - `-d` starts or finds the session and prints its name without going there, for scripts.
 - `--socket <name|path>` (or `TA_TMUX_SOCKET`) picks the tmux server; by default tmux's own.
@@ -17,7 +19,7 @@ ta ls            # list sessions (* means a terminal is attached)
 
 ## Living with other tools
 
-`ta` only does what you ask: it doesn't change global tmux options, bind keys or end the tmux server. Sessions other tools manage on the same server are left alone.
+`ta` only does what you ask: it doesn't change global tmux options, bind keys or end the tmux server. It lists every session on the server, other tools' included, and closes one only after you confirm, so check which one it is first.
 
 ## Install
 

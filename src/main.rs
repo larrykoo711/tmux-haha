@@ -6,6 +6,7 @@ mod command;
 mod direct;
 mod enter;
 mod naming;
+mod pick;
 mod tmux;
 
 use std::process::ExitCode;
@@ -99,17 +100,7 @@ fn run(cli: Cli) -> Result<()> {
             };
             arrive(&tmux, &socket, &id, &name, cli.detached)
         }
-        (None, None) => {
-            ls(&tmux)?;
-            println!(
-                "{}",
-                tr!(
-                    "ta <name>: go to a session, or start it here.",
-                    "ta <名字>：进入会话，没有就在这里新建。"
-                )
-            );
-            Ok(())
-        }
+        (None, None) => pick::run(&tmux, &socket),
     }
 }
 
