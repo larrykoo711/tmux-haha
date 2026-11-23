@@ -87,3 +87,69 @@ fn a_name_and_a_command_together_are_refused() {
     assert!(stderr(&out).contains("not both"), "{}", stderr(&out));
     assert!(w.session_names().is_empty());
 }
+
+fn write_config(w: &World, text: &str) {
+    let dir = w.home().join(".config/ta");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.toml"), text).unwrap();
+}
+
+#[test]
+fn config_socket_is_used() {
+    let w = World::new();
+    let work = w.dir("work");
+    write_config(&w, &format!("socket = \"{}\"\n", w.socket));
+    let out = w
+        .command(&["-d", "foo"], &work)
+        .env_remove("TA_TMUX_SOCKET")
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(w.session_names(), ["foo"]);
+}
+
+#[test]
+fn host_prefix_names_new_sessions() {
+    let w = World::new();
+    let work = w.dir("work");
+    write_config(&w, "host_prefix = true\n");
+    let new = w
+        .command(&["new", "-d"], &work)
+        .env("TA_HOST_PREFIX", "box")
+        .output()
+        .unwrap();
+    assert_eq!(stdout(&new), "box_work\n", "{}", stderr(&new));
+    let again = w
+        .command(&["-d", "work"], &work)
+        .env("TA_HOST_PREFIX", "box")
+        .output()
+        .unwrap();
+    assert_eq!(stdout(&again), "box_work\n");
+    assert_eq!(w.session_names(), ["box_work"]);
+}
+
+#[test]
+fn broken_config_stops_before_tmux() {
+    let w = World::new();
+    let work = w.dir("work");
+    write_config(&w, "sockett = \"x\"\n");
+    let out = w.ta(&["-d", "foo"], &work);
+    assert_eq!(out.status.code(), Some(1));
+    let err = stderr(&out);
+    assert!(err.contains(".config/ta/config.toml"), "{err}");
+    assert!(err.contains("sockett"), "{err}");
+    assert!(w.session_names().is_empty());
+}
+
+#[test]
+fn config_language_is_used() {
+    let w = World::new();
+    let work = w.dir("work");
+    write_config(&w, "language = \"zh\"\n");
+    let out = w
+        .command(&["ls"], &work)
+        .env_remove("TA_LANG")
+        .output()
+        .unwrap();
+    assert!(stdout(&out).contains("还没有会话"), "{}", stdout(&out));
+}

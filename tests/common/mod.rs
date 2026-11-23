@@ -47,6 +47,8 @@ impl World {
             .current_dir(cwd)
             .env_remove("TMUX")
             .env_remove("TMUX_PANE")
+            // Never the real config: CI runners set XDG_CONFIG_HOME.
+            .env_remove("XDG_CONFIG_HOME")
             .env("TA_TMUX_SOCKET", &self.socket)
             .env("TA_LANG", "en")
             .env("HOME", self.home());
@@ -84,6 +86,8 @@ impl World {
             ])
             .arg(cwd)
             .arg("env")
+            .arg("-u")
+            .arg("XDG_CONFIG_HOME")
             .arg(format!("TA_TMUX_SOCKET={}", self.socket))
             .arg("TA_LANG=en")
             .arg(format!("HOME={}", home.display()))

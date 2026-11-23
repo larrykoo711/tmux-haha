@@ -1,6 +1,11 @@
 //! tmux session names. Adapted from cc-moss (MIT,
 //! https://github.com/larrykoo711/cc-moss), `moss-core/src/naming.rs`.
 
+use std::process::Command;
+use std::time::Duration;
+
+use crate::command::output_with_timeout;
+
 /// The longest tmux name part, in characters.
 pub const MAX_CHARS: usize = 40;
 
@@ -86,6 +91,24 @@ fn format_or_separator(c: char) -> bool {
         | 0xE0020..=0xE007F)
 }
 
+/// `<prefix>_<name>`, or just the name without a prefix. The machine's
+/// prefix stays lowercase, as it always was.
+pub fn session_name(prefix: Option<&str>, name: &str) -> String {
+    match prefix {
+        Some(p) => format!("{}_{}", sanitize(p).to_lowercase(), sanitize(name)),
+        None => sanitize(name),
+    }
+}
+
+/// What ta calls a session it starts: the name asked for, else the folder's
+/// name; with this machine's prefix when there is one.
+pub fn new_session_name(asked: Option<&str>, folder: &str, host: Option<&str>) -> String {
+    match asked.filter(|a| !a.trim().is_empty()) {
+        Some(a) => session_name(host, a),
+        None => session_name(host, &short_name(folder)),
+    }
+}
+
 /// `desired`, or `desired-2`, `desired-3`… if another session already has it.
 /// `current` is the session being renamed; its own name is not a conflict.
 pub fn unique(desired: &str, taken: &[String], current: Option<&str>) -> String {
@@ -97,6 +120,38 @@ pub fn unique(desired: &str, taken: &[String], current: Option<&str>) -> String 
         .map(|i| format!("{desired}-{i}"))
         .find(|n| !is_taken(n))
         .unwrap_or_else(|| desired.to_string())
+}
+
+/// The machine's short name: `$TA_HOST_PREFIX` if set, else
+/// `LocalHostName` on macOS (`hostname -s` often returns a generic name
+/// there), else the kernel's host name on Linux, else `hostname -s`.
+pub fn host_prefix() -> Option<String> {
+    if let Some(p) = std::env::var("TA_HOST_PREFIX")
+        .ok()
+        .filter(|v| !v.is_empty())
+    {
+        return Some(p);
+    }
+    let run = |cmd: &mut Command| {
+        output_with_timeout(cmd, Duration::from_millis(500))
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    if cfg!(target_os = "macos") {
+        if let Some(name) = run(Command::new("scutil").args(["--get", "LocalHostName"])) {
+            return Some(name);
+        }
+    }
+    if cfg!(target_os = "linux") {
+        if let Ok(name) = std::fs::read_to_string("/proc/sys/kernel/hostname") {
+            let short = name.trim().split('.').next().unwrap_or_default();
+            if !short.is_empty() {
+                return Some(short.to_string());
+            }
+        }
+    }
+    run(Command::new("hostname").arg("-s"))
 }
 
 /// The longest standard session name, in characters.
@@ -151,6 +206,30 @@ mod tests {
         assert_eq!(unique("web", &taken, None), "web");
         assert_eq!(unique("api", &taken, None), "api-3");
         assert_eq!(unique("api", &taken, Some("api")), "api");
+    }
+
+    #[test]
+    fn host_prefix_comes_first() {
+        assert_eq!(session_name(Some("Work-Laptop"), "api"), "work-laptop_api");
+        assert_eq!(session_name(Some("box"), "my notes"), "box_my-notes");
+        assert_eq!(session_name(None, "api"), "api");
+    }
+
+    #[test]
+    fn new_sessions_are_named_from_the_ask_or_the_folder() {
+        assert_eq!(
+            new_session_name(Some("my notes"), "/w/shop", None),
+            "my-notes"
+        );
+        assert_eq!(new_session_name(None, "/w/shop", None), "shop");
+        assert_eq!(
+            new_session_name(Some(" "), "/w/shop", Some("box")),
+            "box_shop"
+        );
+        assert_eq!(
+            new_session_name(Some("api"), "/w/shop", Some("box")),
+            "box_api"
+        );
     }
 
     #[test]

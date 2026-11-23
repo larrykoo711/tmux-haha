@@ -17,6 +17,19 @@ ta ls            # 列出会话（* 表示有终端正接着）
 - `--socket <名字|路径>`（或环境变量 `TA_TMUX_SOCKET`）指定 tmux server，默认用 tmux 自己的默认 server。
 - 会话名可以用中文和 emoji；tmux 不接受的字符（空格、`.`、`:` 等）会变成 `-`。
 
+## 配置
+
+可选，放在 `~/.config/ta/config.toml`（设了 `XDG_CONFIG_HOME` 就放在它下面）。没有这个文件时用默认值；写错了 `ta` 会说出是哪个文件、哪一行，不会悄悄忽略。
+
+```toml
+socket = "work"        # 用哪个 tmux server（名字或路径）；--socket 和 TA_TMUX_SOCKET 优先
+host_prefix = false    # true：新会话名前加本机名，如 mbp_api（本机名可用 TA_HOST_PREFIX 指定）
+language = "auto"      # auto、zh 或 en；TA_LANG 优先
+
+[folders]
+roots = ["~/code"]     # 目录页从这些文件夹里列出子文件夹
+```
+
 ## 和别的工具共处
 
 `ta` 只做你让它做的事：不改全局 tmux 设置、不绑按键、不结束 tmux server。它列出同一个 tmux server 上的全部会话，包括别的工具建的；只有在你确认之后才会关掉其中一个，所以关之前看清是哪个会话。

@@ -17,6 +17,19 @@ ta ls            # list sessions (* means a terminal is attached)
 - `--socket <name|path>` (or `TA_TMUX_SOCKET`) picks the tmux server; by default tmux's own.
 - Names can be in any script, emoji included; what tmux can't take (spaces, `.`, `:`…) becomes `-`.
 
+## Configuration
+
+Optional, in `~/.config/ta/config.toml` (under `XDG_CONFIG_HOME` when that is set). Without the file, defaults apply; if it has a mistake, `ta` says which file and where, rather than ignoring it.
+
+```toml
+socket = "work"        # which tmux server (a name or a path); --socket and TA_TMUX_SOCKET win
+host_prefix = false    # true: new session names start with this machine's name, e.g. mbp_api (set it with TA_HOST_PREFIX)
+language = "auto"      # auto, zh or en; TA_LANG wins
+
+[folders]
+roots = ["~/code"]     # the folder tab lists the folders inside these
+```
+
 ## Living with other tools
 
 `ta` only does what you ask: it doesn't change global tmux options, bind keys or end the tmux server. It lists every session on the server, other tools' included, and closes one only after you confirm, so check which one it is first.

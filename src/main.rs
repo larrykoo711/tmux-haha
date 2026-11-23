@@ -3,6 +3,7 @@
 #[macro_use]
 mod i18n;
 mod command;
+mod config;
 mod direct;
 mod enter;
 mod naming;
@@ -48,7 +49,9 @@ enum Cmd {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match run(cli) {
+    let config = config::load();
+    i18n::set_config_language(config.as_ref().ok().and_then(|c| c.language.clone()));
+    match config.and_then(|c| run(cli, &c)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("ta: {}", explain(&e));
@@ -67,10 +70,11 @@ fn explain(e: &anyhow::Error) -> String {
     format!("{e:#}")
 }
 
-fn run(cli: Cli) -> Result<()> {
-    let socket = Socket::from_config(cli.socket.as_deref());
+fn run(cli: Cli, config: &config::Config) -> Result<()> {
+    let socket = Socket::from_config(config::socket(cli.socket.as_deref(), config).as_deref());
     let tmux = Tmux::with_socket(socket.clone());
     tmux.installed()?;
+    let host = config.host_prefix.then(naming::host_prefix).flatten();
     match (cli.command, cli.name) {
         (Some(_), Some(name)) => bail!(tr!(
             format!("give a session name or a command, not both (a session named like a command: ta -- {name})"),
@@ -79,15 +83,12 @@ fn run(cli: Cli) -> Result<()> {
         (Some(Cmd::Ls), None) => ls(&tmux),
         (Some(Cmd::New { name }), None) => {
             let cwd = cwd()?;
-            let desired = match name {
-                Some(n) => naming::sanitize(&n),
-                None => naming::short_name(&cwd),
-            };
+            let desired = naming::new_session_name(name.as_deref(), &cwd, host.as_deref());
             let (id, name) = create(&tmux, &desired, &cwd)?;
             arrive(&tmux, &socket, &id, &name, cli.detached)
         }
         (None, Some(wanted)) => {
-            let (id, name) = match direct::resolve(&tmux.sessions(), &wanted) {
+            let (id, name) = match direct::resolve(&tmux.sessions(), &wanted, host.as_deref()) {
                 Target::Existing(id) => {
                     let name = tmux
                         .sessions()
@@ -100,7 +101,7 @@ fn run(cli: Cli) -> Result<()> {
             };
             arrive(&tmux, &socket, &id, &name, cli.detached)
         }
-        (None, None) => pick::run(&tmux, &socket),
+        (None, None) => pick::run(&tmux, &socket, host.as_deref()),
     }
 }
 
