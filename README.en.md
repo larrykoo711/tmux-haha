@@ -5,13 +5,14 @@
 `ta`: one small command to find, start and switch tmux sessions.
 
 ```sh
-ta               # open the picker: type to search, ↑↓ to move, ↵ to go, → to rename or close, tab for windows, esc to quit
+ta               # open the picker: type to search, ↑↓ to move, ↵ to go, → to rename or close, tab for windows and folders, esc to quit
 ta api-review    # go to that session, or start it in this folder and go there
 ta new           # start a session in this folder, named after it (-2, -3… if taken)
 ta ls            # list sessions (* means a terminal is attached)
 ```
 
 - In the picker, ↵ on a search with no match starts a session with that name. Closing a session asks first (Keep is the default), and the session you are in can't be closed from there.
+- The folders tab lists the folders zoxide knows and the ones inside `[folders] roots` from the config; ↵ goes to the session already in that folder, or starts one there.
 - Inside tmux it switches to the session; outside tmux it attaches.
 - `-d` starts or finds the session and prints its name without going there, for scripts.
 - `--socket <name|path>` (or `TA_TMUX_SOCKET`) picks the tmux server; by default tmux's own.

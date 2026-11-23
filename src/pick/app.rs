@@ -19,6 +19,11 @@ pub enum Item {
     New,
     Session(SessionInfo),
     Window(WindowInfo),
+    /// A folder, and the session already started there, if any.
+    Folder {
+        path: String,
+        session: Option<SessionInfo>,
+    },
 }
 
 /// Which list the picker shows. Tab moves between them.
@@ -26,15 +31,17 @@ pub enum Item {
 pub enum Tab {
     Sessions,
     Windows,
+    Folders,
 }
 
 impl Tab {
-    pub const ALL: [Tab; 2] = [Tab::Sessions, Tab::Windows];
+    pub const ALL: [Tab; 3] = [Tab::Sessions, Tab::Windows, Tab::Folders];
 
     pub fn label(self) -> &'static str {
         match self {
             Tab::Sessions => tr!("Sessions", "会话"),
             Tab::Windows => tr!("Windows", "窗口"),
+            Tab::Folders => tr!("Folders", "目录"),
         }
     }
 
@@ -70,6 +77,8 @@ pub enum Row {
     WindowHeader(usize),
     /// Window group, window within it.
     Window(usize, usize),
+    /// Index into the folders.
+    Folder(usize),
 }
 
 impl Row {
@@ -125,6 +134,8 @@ pub enum Action {
         session: String,
         window: String,
     },
+    /// Start a session in this folder.
+    NewIn(String),
     /// Start a session in the current folder, named by the query if any.
     New {
         name: Option<String>,
@@ -144,6 +155,7 @@ pub struct App {
     pub tab: Tab,
     groups: Vec<Group>,
     window_groups: Vec<WindowGroup>,
+    folders: Vec<String>,
     rows: Vec<Row>,
     /// Index into `rows`; always a selectable row.
     pub cursor: usize,
@@ -173,6 +185,7 @@ impl App {
             tab: Tab::Sessions,
             groups: Vec::new(),
             window_groups: Vec::new(),
+            folders: Vec::new(),
             rows: Vec::new(),
             cursor: 0,
             message: None,
@@ -215,6 +228,29 @@ impl App {
             app.window_groups = groups;
             app.refilter();
         });
+    }
+
+    /// The folder tab's folders, in the order they are offered.
+    pub fn set_folders(&mut self, folders: Vec<String>) {
+        self.keeping_selection(|app| {
+            app.folders = folders;
+            app.refilter();
+        });
+    }
+
+    /// The session started in `path`, if any: the most recently active one.
+    pub fn session_in(&self, path: &str) -> Option<&SessionInfo> {
+        self.groups
+            .iter()
+            .find(|g| g.path == path)
+            .and_then(|g| g.sessions.first())
+    }
+
+    pub fn folder(&self, row: Row) -> Option<&str> {
+        match row {
+            Row::Folder(i) => self.folders.get(i).map(String::as_str),
+            _ => None,
+        }
     }
 
     fn keeping_selection(&mut self, change: impl FnOnce(&mut Self)) {
@@ -279,6 +315,10 @@ impl App {
         match *self.rows.get(self.cursor)? {
             Row::New => Some(Item::New),
             row @ Row::Window(..) => self.window(row).cloned().map(Item::Window),
+            row @ Row::Folder(_) => self.folder(row).map(|path| Item::Folder {
+                path: path.to_string(),
+                session: self.session_in(path).cloned(),
+            }),
             row => self.session(row).cloned().map(Item::Session),
         }
     }
@@ -289,6 +329,7 @@ impl App {
         self.session(row)
             .map(|s| s.id.clone())
             .or_else(|| self.window(row).map(|w| w.id.clone()))
+            .or_else(|| self.folder(row).map(String::from))
     }
 
     pub fn is_here(&self, s: &SessionInfo) -> bool {
@@ -298,9 +339,10 @@ impl App {
     /// Search runs over names and folders; groups keep their order unless
     /// searching, sessions in a group are ranked by score.
     fn refilter(&mut self) {
-        if self.tab == Tab::Windows {
-            self.refilter_windows();
-            return;
+        match self.tab {
+            Tab::Windows => return self.refilter_windows(),
+            Tab::Folders => return self.refilter_folders(),
+            Tab::Sessions => {}
         }
         let query = self.query.trim().to_string();
         let mut rows = Vec::new();
@@ -399,6 +441,36 @@ impl App {
             .unwrap_or(0);
     }
 
+    /// Folders match on their own name and their parent's; their order stays.
+    fn refilter_folders(&mut self) {
+        let query = self.query.trim().to_string();
+        let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
+        let mut buf = Vec::new();
+        let mut hits: Vec<(usize, u32)> = self
+            .folders
+            .iter()
+            .enumerate()
+            .filter_map(|(i, path)| {
+                if query.is_empty() {
+                    return Some((i, 0));
+                }
+                let mut parts = path.rsplit('/').filter(|p| !p.is_empty());
+                let name = parts.next().unwrap_or("");
+                let text = format!("{name} {}", parts.next().unwrap_or(""));
+                pattern
+                    .score(Utf32Str::new(&text, &mut buf), &mut self.matcher)
+                    .map(|score| (i, score))
+            })
+            .collect();
+        if !query.is_empty() {
+            hits.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        }
+        self.matched = hits.len();
+        self.total = self.folders.len();
+        self.rows = hits.into_iter().map(|(i, _)| Row::Folder(i)).collect();
+        self.cursor = 0;
+    }
+
     /// Show `tab`, with an empty search.
     fn switch_to(&mut self, tab: Tab) {
         self.tab = tab;
@@ -478,6 +550,13 @@ impl App {
                 session: w.session_id,
                 window: w.id,
             },
+            Some(Item::Folder {
+                session: Some(s), ..
+            }) => Action::Attach(s.id),
+            Some(Item::Folder {
+                path,
+                session: None,
+            }) => Action::NewIn(path),
         }
     }
 
@@ -922,9 +1001,11 @@ mod tests {
         assert_eq!(app.tab, Tab::Windows);
         assert!(matches!(app.selected(), Some(Item::Window(_))));
         app.handle(key(KeyCode::Tab));
+        assert_eq!(app.tab, Tab::Folders);
+        app.handle(key(KeyCode::Tab));
         assert_eq!(app.tab, Tab::Sessions);
         app.handle(key(KeyCode::BackTab));
-        assert_eq!(app.tab, Tab::Windows);
+        assert_eq!(app.tab, Tab::Folders);
     }
 
     #[test]
@@ -963,6 +1044,38 @@ mod tests {
         let mut app = with_windows();
         app.handle(key(KeyCode::Tab));
         typed(&mut app, "scratch");
+        assert_eq!(app.matched, 1);
+    }
+
+    #[test]
+    fn folders_open_or_start() {
+        let mut app = sample(None);
+        app.set_folders(vec!["/w/acme".into(), "/w/fresh".into()]);
+        app.handle(key(KeyCode::BackTab));
+        assert_eq!(app.tab, Tab::Folders);
+        // /w/acme has sessions: the most recent one, web ($2).
+        assert_eq!(app.handle(key(KeyCode::Enter)), Action::Attach("$2".into()));
+        app.handle(key(KeyCode::Down));
+        assert_eq!(
+            app.handle(key(KeyCode::Enter)),
+            Action::NewIn("/w/fresh".into())
+        );
+    }
+
+    #[test]
+    fn folders_search_by_name() {
+        let mut app = sample(None);
+        app.set_folders(vec![
+            "/private/tmp/api".into(),
+            "/home/u/code/billing".into(),
+            "/home/u/code/web".into(),
+        ]);
+        app.handle(key(KeyCode::BackTab));
+        typed(&mut app, "code");
+        // The parent's name counts; the rest of the path doesn't.
+        assert_eq!(app.matched, 2);
+        app.handle(key(KeyCode::Esc));
+        typed(&mut app, "api");
         assert_eq!(app.matched, 1);
     }
 

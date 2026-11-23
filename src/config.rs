@@ -63,8 +63,6 @@ pub fn parse(text: &str, path: &Path) -> Result<Config> {
 
 impl Config {
     /// The folder roots with `~/` expanded.
-    // Read by the folder tab (013 T3.2), which lands next.
-    #[allow(dead_code)]
     pub fn roots(&self, home: &str) -> Vec<String> {
         self.folders
             .roots
