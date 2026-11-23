@@ -87,6 +87,13 @@ impl Row {
     }
 }
 
+/// A list row, recognisable across refreshes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RowKey {
+    New,
+    Id(String),
+}
+
 /// What the → menu offers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Choice {
@@ -265,7 +272,8 @@ impl App {
         let keep = self.key_at(self.cursor);
         change(self);
         if let Some(keep) = keep {
-            if let Some(i) = (0..self.rows.len()).find(|&i| self.key_at(i) == Some(keep.clone())) {
+            if let Some(i) = (0..self.rows.len()).find(|&i| self.key_at(i).as_ref() == Some(&keep))
+            {
                 self.cursor = i;
             }
         }
@@ -331,13 +339,18 @@ impl App {
         }
     }
 
-    /// What a row stands for, to find it again after a refresh: `$N` or `@N`.
-    fn key_at(&self, row: usize) -> Option<String> {
+    /// What a row stands for, to find it again after a refresh: the "new"
+    /// line, or a session (`$N`), window (`@N`) or folder (its path).
+    fn key_at(&self, row: usize) -> Option<RowKey> {
         let row = *self.rows.get(row)?;
+        if row == Row::New {
+            return Some(RowKey::New);
+        }
         self.session(row)
             .map(|s| s.id.clone())
             .or_else(|| self.window(row).map(|w| w.id.clone()))
             .or_else(|| self.folder(row).map(String::from))
+            .map(RowKey::Id)
     }
 
     pub fn is_here(&self, s: &SessionInfo) -> bool {
@@ -991,6 +1004,29 @@ mod tests {
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
         app.mode = Mode::Rename { text: "  ".into() };
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
+    }
+
+    #[test]
+    fn refresh_keeps_the_new_line_selected() {
+        // The picker refreshes sessions and windows every few seconds; a
+        // cursor on "New session here" must stay there, not drop to a session.
+        let mut app = with_windows();
+        app.handle(key(KeyCode::Up));
+        assert_eq!(app.selected(), Some(Item::New));
+        app.set_sessions(
+            app.groups()
+                .iter()
+                .flat_map(|g| g.sessions.clone())
+                .collect(),
+        );
+        assert_eq!(app.selected(), Some(Item::New));
+        app.set_windows(vec![window(("$1", "api"), "@1", 1, "vim", 4)]);
+        assert_eq!(app.selected(), Some(Item::New));
+        // The same with a search typed: the "New session \"…\"" line stays.
+        typed(&mut app, "zzz");
+        assert_eq!(app.selected(), Some(Item::New));
+        app.set_sessions(vec![session("$1", "api", "/w/acme", 5)]);
+        assert_eq!(app.selected(), Some(Item::New));
     }
 
     #[test]

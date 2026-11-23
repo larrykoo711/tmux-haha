@@ -166,3 +166,17 @@ fn picker_leaves_a_managed_session_alone() {
     wait_for(|| (!w.session_names().contains(&"plain".to_string())).then_some(()));
     assert_eq!(w.session_names(), ["claude-work", "driver"]);
 }
+
+#[test]
+fn the_cursor_stays_on_new_through_refreshes() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "api"], &work);
+    w.start_picker(&work);
+    w.keys(&["Up"]);
+    w.wait_for_screen(|s| s.contains("▌ + New session here"));
+    // The picker refreshes every 2 seconds; wait through two of them.
+    std::thread::sleep(std::time::Duration::from_millis(4500));
+    let screen = w.screen();
+    assert!(screen.contains("▌ + New session here"), "{screen}");
+}
