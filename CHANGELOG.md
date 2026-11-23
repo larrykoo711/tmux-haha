@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-23
+
 ### Added
 
 - **Help in English or Chinese.** `ta --help`, `ta help <command>` and usage mistakes follow your language
@@ -20,6 +22,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - **`ta install`** sets up shell completions (zsh, bash, fish) and, if you agree, a tmux key `prefix + T` that opens
   `ta` in a popup; every change is asked for first, and `--uninstall` takes it all out. **`ta completions <shell>`**
   prints the script.
+
+### Fixed
+
+- **The cursor stays on "New session here".** The picker refreshes every 2 seconds, and a cursor on the new-session
+  line used to drop to the first session about a second after you moved onto it.
 
 ## [0.1.0] - 2026-11-23
 
@@ -43,5 +50,6 @@ The first release: one small command to find, start and switch tmux sessions.
   (English or Chinese) and the folder roots. A broken file stops `ta` with the file and the mistake.
 - Prebuilt binaries for macOS (Apple silicon, Intel) and Linux (x86_64, arm64, static musl), plus a Homebrew formula.
 
-[Unreleased]: https://github.com/larrykoo711/tmux-haha/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/larrykoo711/tmux-haha/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/larrykoo711/tmux-haha/releases/tag/v0.1.0
