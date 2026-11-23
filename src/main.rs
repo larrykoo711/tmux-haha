@@ -31,6 +31,12 @@ use direct::Target;
 use tmux::{Access, DuplicateName, NotInstalled, ProcessRunner, SessionInfo, Socket, Tmux};
 
 fn main() -> ExitCode {
+    // A closed pipe (`ta ls | head`) ends ta quietly, as it does any tool,
+    // instead of a panic on the next write.
+    // SAFETY: setting a signal's disposition to the default before any thread starts.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
     // The config first: its `language` decides the help's language too.
     let config = config::load();
     i18n::set_config_language(config.as_ref().ok().and_then(|c| c.language.clone()));
@@ -143,6 +149,9 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             arrive(&tmux, &socket, &id, &name, cli.detached)
         }
         (None, Some(wanted)) => {
+            if wanted.trim().is_empty() {
+                bail!(tr!("give a session name", "请给出会话名"));
+            }
             let (id, name) = match direct::resolve(&tmux.sessions(), &wanted, host.as_deref()) {
                 Target::Existing(id) => {
                     let name = tmux

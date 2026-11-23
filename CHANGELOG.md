@@ -6,6 +6,25 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Security
+
+- **A folder name can no longer run commands on the tmux server.** Checking whether tmux can read a folder passed the
+  folder's name to tmux unescaped, and tmux runs `#(…)` in such a command: a folder named `#(…)` ran that command when
+  you started a session in it or ran `ta doctor` there. Names are now escaped.
+
+### Fixed
+
+- **The picker acts on the session you asked about.** If that session went away while its menu, question or rename box
+  was open, a refresh could move the question onto another session; now the question closes and says so.
+- **`ta install` never writes over a file it can't read** (not UTF-8, no permission), keeps a linked rc file a link,
+  and `--uninstall` puts files back exactly as they were (a missing final newline, a file ta created).
+- **A session name holding tmux's field separator can't hide who manages it**, and `ta` no longer misreads such names.
+- **Inside the popup (`prefix + T`) `ta` knows which session you are in**, so that session still can't be closed.
+- **An empty name, or one of only symbols, no longer means the session called `session`** in `close`, `rename` and
+  `ta <name>`.
+- zsh completions wait for `compinit` instead of printing `command not found: compdef`; bash completions work in
+  macOS's bash 3.2; your own `ta.fish` is left alone; `ta … | head` no longer crashes.
+
 ## [0.2.0] - 2026-11-23
 
 ### Added

@@ -954,6 +954,7 @@ dependencies = [
  "clap",
  "clap_complete",
  "crossterm",
+ "libc",
  "nucleo-matcher",
  "ratatui",
  "serde",

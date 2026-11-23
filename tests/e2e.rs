@@ -358,3 +358,95 @@ fn config_says_where_each_value_comes_from() {
     assert!(path.trim().ends_with(".config/ta/config.toml"), "{path}");
     assert_eq!(path.lines().count(), 1);
 }
+
+#[test]
+fn a_folder_name_is_never_run_as_a_tmux_command() {
+    let w = World::new();
+    let work = w.dir("work");
+    // The server must be running for ta to probe folder access.
+    w.ta(&["-d", "first"], &work);
+    let marker = w.home().join("PWNED");
+    // Folder names can't hold `/`: go home, then touch.
+    let evil = w.dir("#(cd;touch PWNED)");
+    // A name with `#(…)` and `#{…}` as tmux would expand them.
+    let evil2 = w.dir("a#{session_name}b");
+    for dir in [&evil, &evil2] {
+        let out = w.ta(&["new", "-d", "--dir", dir.to_str().unwrap()], &work);
+        assert!(out.status.success(), "{}", stderr(&out));
+    }
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!marker.exists(), "tmux ran a command from a folder name");
+    let doctor = w.command(&["doctor"], &evil).output().unwrap();
+    assert!(doctor.status.code().is_some());
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert!(!marker.exists(), "doctor ran a command from a folder name");
+}
+
+#[test]
+fn a_name_holding_the_separator_cannot_hide_who_manages_it() {
+    let w = World::new();
+    let work = w.dir("work");
+    let evil = "evil|:|1|:|1700000000|:|0|:|";
+    // Made with tmux itself: ta would have cleaned the name.
+    w.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        evil,
+        "-c",
+        work.to_str().unwrap(),
+    ]);
+    let real = w.tmux(&["list-sessions", "-F", "#{session_name}"]);
+    let name = real.lines().next().unwrap().to_string();
+    w.tmux(&["set-option", "-t", &name, "@managed-by", "cc-moss"]);
+    let json = stdout(&w.ta(&["ls", "--json"], &work));
+    let v: serde_json::Value = serde_json::from_str(&json).unwrap();
+    let s = &v["sessions"][0];
+    assert_eq!(s["name"], name.as_str(), "{json}");
+    assert_eq!(s["managed_by"], "cc-moss", "{json}");
+    assert!(s["path"].as_str().unwrap().ends_with("/work"), "{json}");
+    let out = w.ta(&["close", "evil", "--yes"], &work);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert_eq!(w.session_names(), [name]);
+}
+
+#[test]
+fn an_empty_name_closes_nothing() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "session",
+        "-c",
+        work.to_str().unwrap(),
+    ]);
+    for name in ["", "...", "  "] {
+        let out = w.ta(&["close", name, "--yes"], &work);
+        assert_eq!(out.status.code(), Some(1), "{name:?}: {}", stdout(&out));
+    }
+    let out = w.ta(&["-d", ""], &work);
+    assert_eq!(out.status.code(), Some(1));
+    assert_eq!(w.session_names(), ["session"]);
+}
+
+#[test]
+fn a_closed_pipe_is_not_a_crash() {
+    let w = World::new();
+    let work = w.dir("work");
+    let mut child = w
+        .command(&["completions", "bash"], &work)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Read nothing and hang up, as `| head -0` would.
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        !String::from_utf8_lossy(&out.stderr).contains("panicked"),
+        "{}",
+        stderr(&out)
+    );
+}

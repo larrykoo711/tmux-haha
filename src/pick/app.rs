@@ -172,7 +172,19 @@ pub struct App {
     pub total: usize,
     /// The session this picker runs in (`$N`), which it must not close.
     pub here: Option<String>,
+    /// The session (`$N`) an open menu, question or rename box is about:
+    /// what it acts on, whatever row the cursor is on after a refresh.
+    target: Option<String>,
     matcher: Matcher,
+}
+
+/// What the hint line says when the session a question was about went away.
+pub fn gone_hint() -> String {
+    tr!(
+        "That session is no longer there; nothing was done.",
+        "那个会话已经不在了，什么都没做。"
+    )
+    .to_string()
 }
 
 /// Why the current session has no "Close".
@@ -207,6 +219,7 @@ impl App {
             matched: 0,
             total: 0,
             here,
+            target: None,
             matcher: Matcher::new(Config::DEFAULT),
         };
         app.set_sessions(sessions);
@@ -216,6 +229,21 @@ impl App {
     /// Replace the data, keeping the selection on the same session if it still exists.
     pub fn set_sessions(&mut self, sessions: Vec<SessionInfo>) {
         self.keeping_selection(|app| app.group(sessions));
+        // The session an open question is about went away: close the question.
+        if self.mode != Mode::Browse && self.target_session().is_none() {
+            self.mode = Mode::Browse;
+            self.target = None;
+            self.message = Some(gone_hint());
+        }
+    }
+
+    /// The session an open menu, question or rename box is about.
+    pub fn target_session(&self) -> Option<&SessionInfo> {
+        let id = self.target.as_deref()?;
+        self.groups
+            .iter()
+            .flat_map(|g| &g.sessions)
+            .find(|s| s.id == id)
     }
 
     /// Replace the windows, keeping the selection on the same window if it still exists.
@@ -631,6 +659,7 @@ impl App {
             }
             KeyCode::Right => {
                 if let Some(Item::Session(s)) = self.selected() {
+                    self.target = Some(s.id.clone());
                     if let Some(why) = Self::hands_off(&s) {
                         self.message = Some(why);
                     } else if self.is_here(&s) {
@@ -677,13 +706,17 @@ impl App {
             }
             KeyCode::Enter => {
                 self.mode = Mode::Browse;
-                match (choices.get(cursor).copied(), self.selected()) {
-                    (Some(Choice::Open), _) => self.open(),
-                    (Some(Choice::Rename), Some(Item::Session(s))) => {
+                let Some(s) = self.target_session().cloned() else {
+                    self.message = Some(gone_hint());
+                    return Action::None;
+                };
+                match choices.get(cursor).copied() {
+                    Some(Choice::Open) => Action::Attach(s.id),
+                    Some(Choice::Rename) => {
                         self.mode = Mode::Rename { text: s.name };
                         Action::None
                     }
-                    (Some(Choice::Close), Some(Item::Session(_))) => {
+                    Some(Choice::Close) => {
                         // Keep is the default: closing a session cannot be undone.
                         self.mode = Mode::Confirm { yes: false };
                         Action::None
@@ -698,17 +731,20 @@ impl App {
     fn confirm(&mut self, key: KeyEvent, yes: bool) -> Action {
         let close = |app: &mut App| {
             app.mode = Mode::Browse;
-            match app.selected() {
-                Some(Item::Session(s)) if Self::hands_off(&s).is_some() => {
+            match app.target_session().cloned() {
+                None => {
+                    app.message = Some(gone_hint());
+                    Action::None
+                }
+                Some(s) if Self::hands_off(&s).is_some() => {
                     app.message = Self::hands_off(&s);
                     Action::None
                 }
-                Some(Item::Session(s)) if app.is_here(&s) => {
+                Some(s) if app.is_here(&s) => {
                     app.message = Some(here_hint());
                     Action::None
                 }
-                Some(Item::Session(s)) => Action::Close(s.id),
-                _ => Action::None,
+                Some(s) => Action::Close(s.id),
             }
         };
         match key.code {
@@ -735,12 +771,16 @@ impl App {
             KeyCode::Enter => {
                 self.mode = Mode::Browse;
                 let name = text.trim().to_string();
-                match self.selected() {
-                    Some(Item::Session(s)) if Self::hands_off(&s).is_some() => {
+                match self.target_session().cloned() {
+                    None => {
+                        self.message = Some(gone_hint());
+                        Action::None
+                    }
+                    Some(s) if Self::hands_off(&s).is_some() => {
                         self.message = Self::hands_off(&s);
                         Action::None
                     }
-                    Some(Item::Session(s)) if !name.is_empty() && name != s.name => {
+                    Some(s) if !name.is_empty() && name != s.name => {
                         Action::Rename { id: s.id, name }
                     }
                     _ => Action::None,
@@ -767,6 +807,13 @@ mod tests {
 
     fn key(code: KeyCode) -> KeyEvent {
         KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    /// Point open questions at the selected session, as → does.
+    fn aim(app: &mut App) {
+        if let Some(Item::Session(s)) = app.selected() {
+            app.target = Some(s.id);
+        }
     }
 
     fn typed(app: &mut App, text: &str) {
@@ -932,6 +979,7 @@ mod tests {
     fn confirm_refuses_a_managed_session() {
         let mut app = managed_sample();
         select(&mut app, "claude-work");
+        aim(&mut app);
         app.mode = Mode::Confirm { yes: true };
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
         assert_eq!(app.message, Some(managed_hint("cc-moss")));
@@ -941,11 +989,62 @@ mod tests {
     fn rename_refuses_a_managed_session() {
         let mut app = managed_sample();
         select(&mut app, "claude-work");
+        aim(&mut app);
         app.mode = Mode::Rename {
             text: "other".into(),
         };
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
         assert_eq!(app.message, Some(managed_hint("cc-moss")));
+    }
+
+    #[test]
+    fn a_session_that_goes_away_mid_question_is_never_swapped_for_another() {
+        // Close: the question is about b; b goes away; y must not close a.
+        let both = || vec![session("$1", "a", "/w", 9), session("$2", "b", "/w", 5)];
+        let mut app = App::new(both(), None);
+        select(&mut app, "b");
+        app.handle(key(KeyCode::Right));
+        app.handle(key(KeyCode::Down));
+        app.handle(key(KeyCode::Down));
+        app.handle(key(KeyCode::Enter));
+        assert_eq!(app.mode, Mode::Confirm { yes: false });
+        app.set_sessions(vec![session("$1", "a", "/w", 9)]);
+        // The refresh closes the question and says why.
+        assert_eq!(app.mode, Mode::Browse);
+        assert_eq!(app.message, Some(gone_hint()));
+        // A late y is search input now, never a close.
+        assert_eq!(app.handle(key(KeyCode::Char('y'))), Action::None);
+        // Rename: the same.
+        let mut app = App::new(both(), None);
+        select(&mut app, "b");
+        app.handle(key(KeyCode::Right));
+        app.handle(key(KeyCode::Down));
+        app.handle(key(KeyCode::Enter));
+        typed(&mut app, "x");
+        app.set_sessions(vec![session("$1", "a", "/w", 9)]);
+        assert_eq!(app.message, Some(gone_hint()));
+        assert_eq!(app.mode, Mode::Browse);
+        // Enter now opens what the cursor is on; it never renames anything.
+        assert!(!matches!(
+            app.handle(key(KeyCode::Enter)),
+            Action::Rename { .. }
+        ));
+        // While it is still there, the question stays about b even if the
+        // cursor would land elsewhere.
+        let mut app = App::new(both(), None);
+        select(&mut app, "b");
+        app.handle(key(KeyCode::Right));
+        app.handle(key(KeyCode::Down));
+        app.handle(key(KeyCode::Down));
+        app.handle(key(KeyCode::Enter));
+        app.set_sessions(vec![
+            session("$1", "a", "/w", 99),
+            session("$2", "b", "/w", 5),
+        ]);
+        assert_eq!(
+            app.handle(key(KeyCode::Char('y'))),
+            Action::Close("$2".into())
+        );
     }
 
     #[test]
@@ -976,6 +1075,7 @@ mod tests {
         );
         assert_eq!(app.message, Some(here_hint()));
         // Even if a confirmation were somehow open, it does not close here.
+        aim(&mut app);
         app.mode = Mode::Confirm { yes: true };
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
         assert_eq!(app.message, Some(here_hint()));
@@ -1000,8 +1100,10 @@ mod tests {
         // Unchanged or empty: nothing to do.
         let mut app = sample(None);
         select(&mut app, "api");
+        aim(&mut app);
         app.mode = Mode::Rename { text: "api".into() };
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
+        aim(&mut app);
         app.mode = Mode::Rename { text: "  ".into() };
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
     }

@@ -37,7 +37,10 @@ fn install_adds_blocks_once() {
     }
     let rc = std::fs::read_to_string(w.home().join(".zshrc")).unwrap();
     assert_eq!(rc.matches("# >>> ta: completions >>>").count(), 1, "{rc}");
-    assert!(rc.contains("source <(ta completions zsh)"), "{rc}");
+    assert!(
+        rc.contains("ta completions zsh") && rc.contains("functions[compdef]"),
+        "{rc}"
+    );
     let conf = std::fs::read_to_string(w.home().join(".tmux.conf")).unwrap();
     assert_eq!(conf.matches("display-popup -E").count(), 1, "{conf}");
     assert!(conf.contains("bind-key T"), "{conf}");
@@ -110,5 +113,79 @@ fn doctor_sees_the_completions() {
     assert!(
         after.contains("✓ completions") && after.contains("zsh"),
         "{after}"
+    );
+}
+
+#[test]
+fn uninstall_puts_back_a_missing_newline_and_removes_files_ta_made() {
+    let w = World::new();
+    // No newline at the end, and no tmux config at all.
+    std::fs::write(w.home().join(".zshrc"), "export A=1").unwrap();
+    zsh(&w, &["install", "--yes"]);
+    assert!(w.home().join(".tmux.conf").exists());
+    let out = zsh(&w, &["install", "--uninstall", "--yes"]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(
+        std::fs::read_to_string(w.home().join(".zshrc")).unwrap(),
+        "export A=1"
+    );
+    assert!(
+        !w.home().join(".tmux.conf").exists(),
+        "ta made it, ta took it away"
+    );
+}
+
+#[test]
+fn a_file_ta_cannot_read_is_never_written_over() {
+    let w = World::new();
+    // Latin-1, not UTF-8.
+    let rc: &[u8] = b"# caf\xe9\nexport A=1\n";
+    std::fs::write(w.home().join(".zshrc"), rc).unwrap();
+    let out = zsh(&w, &["install", "--yes", "--no-tmux-key"]);
+    assert_eq!(out.status.code(), Some(1), "{}", stdout(&out));
+    assert!(stderr(&out).contains("leaves it alone"), "{}", stderr(&out));
+    assert_eq!(std::fs::read(w.home().join(".zshrc")).unwrap(), rc);
+}
+
+#[test]
+fn a_linked_rc_file_stays_a_link() {
+    let w = World::new();
+    let dotfiles = w.dir("dotfiles");
+    std::fs::write(dotfiles.join("zshrc"), "export A=1\n").unwrap();
+    std::os::unix::fs::symlink(dotfiles.join("zshrc"), w.home().join(".zshrc")).unwrap();
+    zsh(&w, &["install", "--yes", "--no-tmux-key"]);
+    let link = std::fs::symlink_metadata(w.home().join(".zshrc")).unwrap();
+    assert!(link.file_type().is_symlink());
+    assert!(std::fs::read_to_string(dotfiles.join("zshrc"))
+        .unwrap()
+        .contains("ta completions zsh"));
+    zsh(&w, &["install", "--uninstall", "--yes"]);
+    assert_eq!(
+        std::fs::read_to_string(dotfiles.join("zshrc")).unwrap(),
+        "export A=1\n"
+    );
+}
+
+#[test]
+fn your_own_fish_file_is_left_alone() {
+    let w = World::new();
+    let own = w.home().join(".config/fish/completions/ta.fish");
+    std::fs::create_dir_all(own.parent().unwrap()).unwrap();
+    std::fs::write(&own, "complete -c ta -f\n").unwrap();
+    let out = w
+        .command(
+            &["install", "--yes", "--shell", "fish", "--no-tmux-key"],
+            &w.home(),
+        )
+        .output()
+        .unwrap();
+    assert!(
+        stdout(&out).contains("is your own file"),
+        "{}",
+        stdout(&out)
+    );
+    assert_eq!(
+        std::fs::read_to_string(&own).unwrap(),
+        "complete -c ta -f\n"
     );
 }

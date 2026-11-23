@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::CommandFactory;
 
 use crate::block;
@@ -68,7 +68,7 @@ fn tmux_conf(home: &Path) -> PathBuf {
 pub fn completions_installed(shell: ShellName) -> bool {
     let Ok(home) = home() else { return false };
     let path = shell_file(shell, &home);
-    let text = std::fs::read_to_string(&path).unwrap_or_default();
+    let text = std::fs::read_to_string(real(&path)).unwrap_or_default();
     match shell {
         ShellName::Fish => text.starts_with(FISH_HEADER),
         _ => block::contains(&text, COMPLETIONS),
@@ -83,50 +83,170 @@ struct Change {
     after: Option<String>,
 }
 
-fn read(path: &Path) -> String {
-    std::fs::read_to_string(path).unwrap_or_default()
+/// Notes ta keeps inside its own block, so taking it out puts the file
+/// back exactly as it was.
+const NOTE_CREATED: &str = "# (ta created this file)";
+const NOTE_NEWLINE: &str = "# (ta ended the line above with a newline)";
+
+/// The file a path names: a link's target, so a dotfiles link stays a link.
+fn real(path: &Path) -> PathBuf {
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.file_type().is_symlink() => {
+            std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+        }
+        _ => path.to_path_buf(),
+    }
+}
+
+/// The file's text; `None` when there is no file. Anything ta can't read
+/// as text is an error, never an empty file to write over.
+fn read(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => bail!(tr!(
+            format!(
+                "cannot read {} ({e}), so ta leaves it alone",
+                path.display()
+            ),
+            format!("读不了 {}（{e}），ta 不会改它", path.display())
+        )),
+    }
+}
+
+/// `before` with ta's block holding `body`, noting what ta did to the file
+/// around it. A block already there keeps its notes.
+fn with_block(before: Option<&str>, tag: &str, body: &str) -> Result<String> {
+    let text = before.unwrap_or("");
+    let notes: Vec<&str> = match block::parts(text, tag)? {
+        Some((_, old, _)) => old
+            .lines()
+            .filter(|l| *l == NOTE_CREATED || *l == NOTE_NEWLINE)
+            .map(|l| {
+                if l == NOTE_CREATED {
+                    NOTE_CREATED
+                } else {
+                    NOTE_NEWLINE
+                }
+            })
+            .collect(),
+        None => {
+            let mut notes = Vec::new();
+            if before.is_none() {
+                notes.push(NOTE_CREATED);
+            }
+            if !text.is_empty() && !text.ends_with('\n') {
+                notes.push(NOTE_NEWLINE);
+            }
+            notes
+        }
+    };
+    let mut full = notes.join("\n");
+    if !full.is_empty() {
+        full.push('\n');
+    }
+    full.push_str(body);
+    block::upsert(text, tag, &full)
+}
+
+/// `text` without ta's block, as it was before ta added it; `None` when the
+/// file was ta's own and should go.
+fn without_block(text: &str, tag: &str) -> Result<Option<String>> {
+    let Some((mut before, body, after)) = block::parts(text, tag)? else {
+        return Ok(Some(text.to_string()));
+    };
+    if after.is_empty() && body.lines().any(|l| l == NOTE_NEWLINE) {
+        if before.ends_with("\r\n") {
+            before.truncate(before.len() - 2);
+        } else if before.ends_with('\n') {
+            before.pop();
+        }
+    }
+    let rest = format!("{before}{after}");
+    Ok(
+        if rest.is_empty() && body.lines().any(|l| l == NOTE_CREATED) {
+            None
+        } else {
+            Some(rest)
+        },
+    )
+}
+
+/// The line that loads the completions. zsh needs `compdef` (compinit) first;
+/// `eval` also works in macOS's bash 3.2, where `source <(…)` does not.
+fn completion_line(shell: ShellName) -> String {
+    match shell {
+        ShellName::Zsh => "if command -v ta >/dev/null 2>&1 && (( $+functions[compdef] )); then eval \"$(ta completions zsh)\"; fi".to_string(),
+        _ => format!("if command -v ta >/dev/null 2>&1; then eval \"$(ta completions {shell})\"; fi"),
+    }
 }
 
 fn completion_change(shell: ShellName, home: &Path, uninstall: bool) -> Result<Option<Change>> {
-    let path = shell_file(shell, home);
-    let before = read(&path);
+    let path = real(&shell_file(shell, home));
+    let before = read(&path)?;
     let what = tr!(
         format!("{shell} completions for ta"),
         format!("ta 的 {shell} 补全")
     );
     let after = match (shell, uninstall) {
-        (ShellName::Fish, false) => Some(format!("{FISH_HEADER}\n{}", completions(shell))),
-        (ShellName::Fish, true) if before.starts_with(FISH_HEADER) => None,
-        (ShellName::Fish, true) => return Ok(None),
-        (_, false) => Some(block::upsert(
-            &before,
+        (ShellName::Fish, false) => match &before {
+            Some(text) if !text.starts_with(FISH_HEADER) => {
+                println!(
+                    "{}",
+                    tr!(
+                        format!(
+                            "{} is your own file, so ta leaves it alone.",
+                            path.display()
+                        ),
+                        format!("{} 是你自己的文件，ta 不动它。", path.display())
+                    )
+                );
+                return Ok(None);
+            }
+            _ => Some(format!("{FISH_HEADER}\n{}", completions(shell))),
+        },
+        (ShellName::Fish, true) => match &before {
+            Some(text) if text.starts_with(FISH_HEADER) => None,
+            _ => return Ok(None),
+        },
+        (_, false) => Some(with_block(
+            before.as_deref(),
             COMPLETIONS,
-            &format!("if command -v ta >/dev/null 2>&1; then source <(ta completions {shell}); fi"),
+            &completion_line(shell),
         )?),
-        (_, true) => Some(block::remove(&before, COMPLETIONS)?),
+        (_, true) => match &before {
+            Some(text) => without_block(text, COMPLETIONS)?,
+            None => return Ok(None),
+        },
     };
-    let unchanged = match &after {
-        Some(text) => *text == before,
-        None => !path.exists(),
+    let unchanged = match (&after, &before) {
+        (Some(new), Some(old)) => new == old,
+        (None, None) => true,
+        _ => false,
     };
     Ok((!unchanged).then_some(Change { path, what, after }))
 }
 
 fn popup_change(home: &Path, uninstall: bool) -> Result<Option<Change>> {
-    let path = tmux_conf(home);
-    let before = read(&path);
-    let after = if uninstall {
-        block::remove(&before, POPUP)?
-    } else {
-        block::upsert(&before, POPUP, POPUP_KEY)?
+    let path = real(&tmux_conf(home));
+    let before = read(&path)?;
+    let after = match (uninstall, &before) {
+        (true, None) => return Ok(None),
+        (true, Some(text)) => without_block(text, POPUP)?,
+        (false, _) => Some(with_block(before.as_deref(), POPUP, POPUP_KEY)?),
     };
-    Ok((after != before).then(|| Change {
+    let unchanged = match (&after, &before) {
+        (Some(new), Some(old)) => new == old,
+        (None, None) => true,
+        _ => false,
+    };
+    Ok((!unchanged).then(|| Change {
         path,
         what: tr!(
             "a tmux key, prefix + T, that opens ta in a popup".to_string(),
             "一个 tmux 按键：prefix + T 用弹窗打开 ta".to_string()
         ),
-        after: Some(after),
+        after,
     }))
 }
 

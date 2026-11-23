@@ -697,6 +697,8 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
     // Rows the card's text takes once wrapped: the box opens right below it.
     let used = u16::try_from(card.line_count(inner.width)).unwrap_or(u16::MAX);
     frame.render_widget(card, inner);
+    // A question is about its own session, whatever the cursor is on now.
+    let title = app.target_session().map_or(title, |s| s.name.clone());
     draw_overlay(frame, inner, used, app, &title);
 }
 
