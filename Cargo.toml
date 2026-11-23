@@ -1,6 +1,6 @@
 [package]
 name = "tmux-haha"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.89"
 description = "ta: find, start and switch tmux sessions from one small command"
