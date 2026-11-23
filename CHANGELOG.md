@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-23
+
 ### Security
 
 - **A folder name can no longer run commands on the tmux server.** Checking whether tmux can read a folder passed the
@@ -69,6 +71,7 @@ The first release: one small command to find, start and switch tmux sessions.
   (English or Chinese) and the folder roots. A broken file stops `ta` with the file and the mistake.
 - Prebuilt binaries for macOS (Apple silicon, Intel) and Linux (x86_64, arm64, static musl), plus a Homebrew formula.
 
-[Unreleased]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/larrykoo711/tmux-haha/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/larrykoo711/tmux-haha/releases/tag/v0.1.0
