@@ -45,7 +45,13 @@ tmux set-option -t <会话> @managed-by <工具名>
 
 ## 安装
 
-从源码：`cargo install --git https://github.com/larrykoo711/tmux-haha`（需要 Rust 1.89+ 和 tmux）。
+Homebrew（macOS、Linux）：
+
+```sh
+brew install larrykoo711/tap/tmux-haha
+```
+
+也可以从 [Releases](https://github.com/larrykoo711/tmux-haha/releases) 下载对应平台的包，把里面的 `ta` 放进 PATH；或者从源码装：`cargo install --git https://github.com/larrykoo711/tmux-haha`（需要 Rust 1.89+）。都需要先装好 tmux。
 
 ## 许可
 

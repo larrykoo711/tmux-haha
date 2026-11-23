@@ -45,7 +45,13 @@ tmux set-option -t <session> @managed-by <tool>
 
 ## Install
 
-From source: `cargo install --git https://github.com/larrykoo711/tmux-haha` (needs Rust 1.89+ and tmux).
+Homebrew (macOS, Linux):
+
+```sh
+brew install larrykoo711/tap/tmux-haha
+```
+
+Or download the archive for your platform from [Releases](https://github.com/larrykoo711/tmux-haha/releases) and put its `ta` on your PATH, or build from source: `cargo install --git https://github.com/larrykoo711/tmux-haha` (needs Rust 1.89+). Either way, tmux comes first.
 
 ## License
 

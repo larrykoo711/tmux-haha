@@ -16,6 +16,7 @@
 | `src/naming.rs` | session names: what tmux can take, `-2` for taken names |
 | `src/i18n.rs` | English / Chinese, `tr!` |
 | `tests/e2e.rs` | end-to-end tests on a private tmux server |
+| `packaging/homebrew/` | Homebrew formula template and `render.sh`; `release.yml` renders it for `larrykoo711/homebrew-tap` |
 | `tests/picker.rs` | the picker in a real pane on a private server, driven by `tmux send-keys` |
 
 ## Conventions
