@@ -9,6 +9,7 @@
 | `src/main.rs` | CLI (`ta`, `ta <name>`, `ta new`, `ta ls`) |
 | `src/pick/` | the picker: `app.rs` state and keys, `ui.rs` drawing, `mod.rs` terminal and event loop |
 | `src/config.rs` | `~/.config/ta/config.toml`: defaults when missing, an error naming the file when broken |
+| `src/folders.rs` | the folder tab's folders: zoxide (1 s at most), then the configured roots |
 | `src/tmux.rs` | tmux adapter: every tmux command goes through a `Runner` with a timeout |
 | `src/direct.rs` | which session a name means |
 | `src/enter.rs` | switch (inside tmux) or attach (outside) |

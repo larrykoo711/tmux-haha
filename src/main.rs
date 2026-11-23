@@ -6,6 +6,7 @@ mod command;
 mod config;
 mod direct;
 mod enter;
+mod folders;
 mod naming;
 mod pick;
 mod tmux;
@@ -101,7 +102,10 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             };
             arrive(&tmux, &socket, &id, &name, cli.detached)
         }
-        (None, None) => pick::run(&tmux, &socket, host.as_deref()),
+        (None, None) => {
+            let home = std::env::var("HOME").unwrap_or_default();
+            pick::run(&tmux, &socket, host.as_deref(), &config.roots(&home))
+        }
     }
 }
 

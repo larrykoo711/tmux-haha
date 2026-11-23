@@ -102,3 +102,40 @@ fn picker_goes_to_the_chosen_window() {
     w.keys(&["Enter"]);
     wait_for(|| (current().trim() == "second").then_some(()));
 }
+
+#[test]
+fn picker_starts_a_session_in_the_chosen_folder() {
+    let w = World::new();
+    let work = w.dir("work");
+    let beta = w.dir("code/beta");
+    w.dir("code/alpha");
+    w.config("[folders]\nroots = [\"~/code\"]\n");
+    w.start_picker(&work);
+    w.keys(&["BTab"]);
+    w.wait_for_screen(|s| s.contains("alpha") && s.contains("beta"));
+    w.type_text("beta");
+    w.keys(&["Enter"]);
+    wait_for(|| {
+        w.session_names()
+            .contains(&"beta".to_string())
+            .then_some(())
+    });
+    let path = w.tmux(&["display-message", "-p", "-t", "beta", "#{session_path}"]);
+    assert_eq!(path.trim(), beta.to_string_lossy());
+}
+
+#[test]
+fn picker_folder_with_a_session_goes_there() {
+    let w = World::new();
+    let work = w.dir("work");
+    let alpha = w.dir("code/alpha");
+    w.ta(&["-d", "already"], &alpha);
+    w.config("[folders]\nroots = [\"~/code\"]\n");
+    w.start_picker(&work);
+    w.keys(&["BTab"]);
+    w.wait_for_screen(|s| s.contains("already is open here"));
+    w.keys(&["Enter"]);
+    // The picker leaves (its session with it); no session was started.
+    wait_for(|| (!w.session_names().contains(&"driver".to_string())).then_some(()));
+    assert_eq!(w.session_names(), ["already"]);
+}
