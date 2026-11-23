@@ -146,11 +146,45 @@ pub struct SessionInfo {
     pub path: String,
 }
 
+/// One row of `tmux list-windows -a`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WindowInfo {
+    pub session_id: String,
+    pub session_name: String,
+    /// `@N`
+    pub id: String,
+    pub index: u32,
+    pub name: String,
+    /// The session's current window.
+    pub active: bool,
+    pub panes: u32,
+    pub activity_ms: i64,
+    /// Where its active pane is now.
+    pub path: String,
+}
+
 /// Field separator in `-F` formats. Printable on purpose: tmux 3.5 replaces
 /// control characters such as tabs in format output with `_`.
 const SEP: &str = "|:|";
 
 const SESSION_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{session_windows}|:|#{session_activity}|:|#{session_attached}|:|#{session_path}";
+
+const WINDOW_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{window_id}|:|#{window_index}|:|#{window_name}|:|#{window_active}|:|#{window_panes}|:|#{window_activity}|:|#{pane_current_path}";
+
+fn parse_window(line: &str) -> Option<WindowInfo> {
+    let mut f = line.splitn(9, SEP);
+    Some(WindowInfo {
+        session_id: f.next()?.to_string(),
+        session_name: f.next()?.to_string(),
+        id: f.next()?.to_string(),
+        index: f.next()?.parse().ok()?,
+        name: f.next()?.to_string(),
+        active: f.next()? == "1",
+        panes: f.next()?.parse().ok()?,
+        activity_ms: f.next()?.parse::<i64>().ok()? * 1000,
+        path: f.next().unwrap_or_default().to_string(),
+    })
+}
 
 fn parse_session(line: &str) -> Option<SessionInfo> {
     let mut f = line.splitn(6, SEP);
@@ -279,6 +313,19 @@ impl<R: Runner> Tmux<R> {
         (id == pane && session.starts_with('$')).then(|| session.to_string())
     }
 
+    /// Make window `@N` its session's current window.
+    pub fn select_window(&self, window_id: &str) -> Result<()> {
+        self.run(&["select-window", "-t", window_id]).map(drop)
+    }
+
+    /// Every window of every session; empty when no server runs.
+    pub fn windows(&self) -> Vec<WindowInfo> {
+        let Ok(out) = self.run(&["list-windows", "-a", "-F", WINDOW_FORMAT]) else {
+            return Vec::new();
+        };
+        out.lines().filter_map(parse_window).collect()
+    }
+
     /// Every session; empty when no server runs.
     pub fn sessions(&self) -> Vec<SessionInfo> {
         let Ok(out) = self.run(&["list-sessions", "-F", SESSION_FORMAT]) else {
@@ -381,6 +428,21 @@ mod tests {
         assert!(row.attached);
         assert_eq!(row.path, "/w/a|:|b");
         assert!(parse_session("garbage").is_none());
+    }
+
+    #[test]
+    fn parses_a_window_row() {
+        let w = parse_window("$1|:|api|:|@4|:|2|:|vim|:|1|:|3|:|1700000000|:|/w/a").unwrap();
+        assert_eq!(
+            (w.session_id.as_str(), w.session_name.as_str()),
+            ("$1", "api")
+        );
+        assert_eq!((w.id.as_str(), w.index, w.name.as_str()), ("@4", 2, "vim"));
+        assert!(w.active);
+        assert_eq!(w.panes, 3);
+        assert_eq!(w.activity_ms, 1_700_000_000_000);
+        assert_eq!(w.path, "/w/a");
+        assert!(parse_window("$1|:|api").is_none());
     }
 
     #[test]

@@ -86,3 +86,19 @@ fn picker_cannot_close_its_own_session() {
     w.wait_for_screen(|s| s.contains("Find a session"));
     assert_eq!(w.session_names(), ["driver"]);
 }
+
+#[test]
+fn picker_goes_to_the_chosen_window() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "multi"], &work);
+    w.tmux(&["new-window", "-d", "-t", "multi", "-n", "second"]);
+    let current = || w.tmux(&["display-message", "-p", "-t", "multi", "#{window_name}"]);
+    assert_ne!(current().trim(), "second");
+    w.start_picker(&work);
+    w.keys(&["Tab"]);
+    w.wait_for_screen(|s| s.contains("Find a window"));
+    w.type_text("second");
+    w.keys(&["Enter"]);
+    wait_for(|| (current().trim() == "second").then_some(()));
+}

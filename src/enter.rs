@@ -59,6 +59,18 @@ pub fn enter<R: Runner>(tmux: &Tmux<R>, socket: &Socket, id: &str) -> Result<()>
     }
 }
 
+/// Bring the terminal to window `window` (`@N`) of session `session`: make
+/// it the session's current window, then go to the session.
+pub fn enter_window<R: Runner>(
+    tmux: &Tmux<R>,
+    socket: &Socket,
+    session: &str,
+    window: &str,
+) -> Result<()> {
+    tmux.select_window(window)?;
+    enter(tmux, socket, session)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -40,6 +40,7 @@ pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket, host: Option<&str>) -> R
         std::env::var("TMUX_PANE").ok().as_deref(),
     );
     let mut app = App::new(tmux.sessions(), here);
+    app.set_windows(tmux.windows());
     let home = std::env::var("HOME").ok();
     let cwd = crate::cwd()?;
     let mut view = ui::View {
@@ -56,6 +57,9 @@ pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket, host: Option<&str>) -> R
     // The screen is restored: hand the terminal to whatever comes next.
     match action {
         Action::Attach(id) => crate::enter::enter(tmux, socket, &id),
+        Action::AttachWindow { session, window } => {
+            crate::enter::enter_window(tmux, socket, &session, &window)
+        }
         Action::New { name } => {
             let desired = naming::new_session_name(name.as_deref(), &cwd, host);
             let (id, _) = crate::create(tmux, &desired, &cwd)?;
@@ -78,6 +82,7 @@ fn event_loop(
         terminal.draw(|f| hits = ui::draw(f, app, view))?;
         if last_refresh.elapsed() >= REFRESH {
             app.set_sessions(tmux.sessions());
+            app.set_windows(tmux.windows());
             last_refresh = Instant::now();
         }
         if !event::poll(TICK)? {
@@ -114,11 +119,13 @@ fn event_loop(
                     ),
                 });
                 app.set_sessions(tmux.sessions());
+                app.set_windows(tmux.windows());
                 last_refresh = Instant::now();
             }
             Action::Rename { id, name } => {
                 app.message = Some(rename(tmux, &id, &name));
                 app.set_sessions(tmux.sessions());
+                app.set_windows(tmux.windows());
                 last_refresh = Instant::now();
             }
             done => return Ok(done),
