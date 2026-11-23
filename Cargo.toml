@@ -1,0 +1,28 @@
+[package]
+name = "tmux-haha"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.89"
+description = "ta: find, start and switch tmux sessions from one small command"
+license = "MIT"
+repository = "https://github.com/larrykoo711/tmux-haha"
+readme = "README.md"
+keywords = ["tmux", "terminal", "cli", "session"]
+categories = ["command-line-utilities"]
+
+[[bin]]
+name = "ta"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+unicode-width = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
