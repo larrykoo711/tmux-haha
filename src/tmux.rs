@@ -171,36 +171,65 @@ pub struct WindowInfo {
 const SEP: &str = "|:|";
 
 /// `#{@managed-by}`: the option a tool sets on the sessions it manages (see the README).
-const SESSION_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{session_windows}|:|#{session_activity}|:|#{session_attached}|:|#{@managed-by}|:|#{session_path}";
+// Free text (names, paths) can hold anything, the separator included: it
+// is only ever the last field of a line, after fields that can't hold it,
+// and names and paths are asked for in their own calls, keyed by id.
+const SESSION_FORMAT: &str = "#{session_id}|:|#{session_windows}|:|#{session_activity}|:|#{session_attached}|:|#{@managed-by}|:|#{session_name}";
+const SESSION_PATHS: &str = "#{session_id}|:|#{session_path}";
+const WINDOW_FORMAT: &str = "#{session_id}|:|#{window_id}|:|#{window_index}|:|#{window_active}|:|#{window_panes}|:|#{window_activity}|:|#{window_name}";
+const WINDOW_PATHS: &str = "#{window_id}|:|#{pane_current_path}";
 
-const WINDOW_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{window_id}|:|#{window_index}|:|#{window_name}|:|#{window_active}|:|#{window_panes}|:|#{window_activity}|:|#{pane_current_path}";
+/// `$3`, `@12`: tmux's own ids, nothing else.
+fn is_id(s: &str, sigil: char) -> bool {
+    s.strip_prefix(sigil)
+        .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+}
 
+/// One `list-windows` line; the session's name and the path come separately.
 fn parse_window(line: &str) -> Option<WindowInfo> {
-    let mut f = line.splitn(9, SEP);
+    let mut f = line.splitn(7, SEP);
+    let session_id = f.next()?.to_string();
+    let id = f.next()?.to_string();
+    if !is_id(&session_id, '$') || !is_id(&id, '@') {
+        return None;
+    }
     Some(WindowInfo {
-        session_id: f.next()?.to_string(),
-        session_name: f.next()?.to_string(),
-        id: f.next()?.to_string(),
+        session_id,
+        session_name: String::new(),
+        id,
         index: f.next()?.parse().ok()?,
-        name: f.next()?.to_string(),
         active: f.next()? == "1",
         panes: f.next()?.parse().ok()?,
         activity_ms: f.next()?.parse::<i64>().ok()? * 1000,
-        path: f.next().unwrap_or_default().to_string(),
+        name: f.next()?.to_string(),
+        path: String::new(),
     })
 }
 
+/// One `list-sessions` line; the path comes separately.
 fn parse_session(line: &str) -> Option<SessionInfo> {
-    let mut f = line.splitn(7, SEP);
+    let mut f = line.splitn(6, SEP);
+    let id = f.next()?.to_string();
+    if !is_id(&id, '$') {
+        return None;
+    }
     Some(SessionInfo {
-        id: f.next()?.to_string(),
-        name: f.next()?.to_string(),
+        id,
         windows: f.next()?.parse().ok()?,
         activity_ms: f.next()?.parse::<i64>().ok()? * 1000,
         attached: f.next()? != "0",
         managed_by: Some(f.next()?.trim().to_string()).filter(|m| !m.is_empty()),
-        path: f.next().unwrap_or_default().to_string(),
+        name: f.next()?.to_string(),
+        path: String::new(),
     })
+}
+
+/// `id → free text` from lines of `<id>|:|<text>`.
+fn by_id(out: &str) -> std::collections::HashMap<String, String> {
+    out.lines()
+        .filter_map(|l| l.split_once(SEP))
+        .map(|(id, text)| (id.to_string(), text.to_string()))
+        .collect()
 }
 
 /// tmux expands `#` formats in `-c` and treats a trailing `;` in any argument
@@ -267,7 +296,9 @@ impl<R: Runner> Tmux<R> {
         if self.run(&["list-sessions", "-F", "#{session_id}"]).is_err() {
             return Access::NoServer;
         }
-        let q = format!("'{}'", dir.replace('\'', r"'\''"));
+        // tmux expands `#{…}` and runs `#(…)` in a run-shell command before
+        // the shell sees it: `##` is a literal `#`. Then quote for the shell.
+        let q = format!("'{}'", dir.replace('#', "##").replace('\'', r"'\''"));
         match self.run(&["run-shell", &format!("test -r {q} && test -x {q}")]) {
             Ok(_) => Access::Readable,
             Err(_) => Access::Denied,
@@ -308,10 +339,23 @@ impl<R: Runner> Tmux<R> {
     /// The session this process runs in (`$N`), when it runs inside tmux on
     /// this server: `tmux_env` and `pane` are the inherited `TMUX` and `TMUX_PANE`.
     pub fn current_session(&self, tmux_env: Option<&str>, pane: Option<&str>) -> Option<String> {
-        let pane = pane.filter(|p| p.starts_with('%'))?;
-        if !self.matches_client(tmux_env?) {
+        let tmux_env = tmux_env?;
+        if !self.matches_client(tmux_env) {
             return None;
         }
+        let Some(pane) = pane.filter(|p| p.starts_with('%')) else {
+            // A popup (`display-popup`) has no TMUX_PANE; TMUX's third field
+            // is the session it was opened over.
+            let n = tmux_env.split(',').nth(2)?;
+            let id = format!("${n}");
+            if !is_id(&id, '$') {
+                return None;
+            }
+            let out = self
+                .run(&["display-message", "-p", "-t", &id, "#{session_id}"])
+                .ok()?;
+            return (out.trim_end() == id).then_some(id);
+        };
         let out = self
             .run(&[
                 "display-message",
@@ -336,7 +380,22 @@ impl<R: Runner> Tmux<R> {
         let Ok(out) = self.run(&["list-windows", "-a", "-F", WINDOW_FORMAT]) else {
             return Vec::new();
         };
-        out.lines().filter_map(parse_window).collect()
+        let paths = self
+            .run(&["list-windows", "-a", "-F", WINDOW_PATHS])
+            .map(|o| by_id(&o))
+            .unwrap_or_default();
+        let names = self
+            .run(&["list-sessions", "-F", "#{session_id}|:|#{session_name}"])
+            .map(|o| by_id(&o))
+            .unwrap_or_default();
+        out.lines()
+            .filter_map(parse_window)
+            .map(|mut w| {
+                w.path = paths.get(&w.id).cloned().unwrap_or_default();
+                w.session_name = names.get(&w.session_id).cloned().unwrap_or_default();
+                w
+            })
+            .collect()
     }
 
     /// Every session; empty when no server runs.
@@ -344,7 +403,17 @@ impl<R: Runner> Tmux<R> {
         let Ok(out) = self.run(&["list-sessions", "-F", SESSION_FORMAT]) else {
             return Vec::new();
         };
-        out.lines().filter_map(parse_session).collect()
+        let paths = self
+            .run(&["list-sessions", "-F", SESSION_PATHS])
+            .map(|o| by_id(&o))
+            .unwrap_or_default();
+        out.lines()
+            .filter_map(parse_session)
+            .map(|mut s| {
+                s.path = paths.get(&s.id).cloned().unwrap_or_default();
+                s
+            })
+            .collect()
     }
 }
 
@@ -417,6 +486,18 @@ mod tests {
             Tmux::new(&fake).current_session(Some(here), Some("%7")),
             None
         );
+        // A popup: no pane, the session from TMUX's third field.
+        let fake = Fake::new(&[Ok("/tmp/tmux-1/default|:|42\n"), Ok("$5\n")]);
+        assert_eq!(
+            Tmux::new(&fake).current_session(Some("/tmp/tmux-1/default,42,5"), None),
+            Some("$5".into())
+        );
+        // …that session gone: tmux names another, so not "here".
+        let fake = Fake::new(&[Ok("/tmp/tmux-1/default|:|42\n"), Ok("$0\n")]);
+        assert_eq!(
+            Tmux::new(&fake).current_session(Some("/tmp/tmux-1/default,42,5"), None),
+            None
+        );
         // Outside tmux.
         let fake = Fake::new(&[]);
         assert_eq!(Tmux::new(&fake).current_session(None, None), None);
@@ -433,32 +514,29 @@ mod tests {
 
     #[test]
     fn parses_a_session_row() {
-        let row = parse_session("$3|:|api|:|2|:|1700000000|:|1|:||:|/w/a|:|b").unwrap();
-        assert_eq!(row.id, "$3");
-        assert_eq!(row.name, "api");
+        let row = parse_session("$3|:|2|:|1700000000|:|1|:||:|api|:|x").unwrap();
+        assert_eq!((row.id.as_str(), row.name.as_str()), ("$3", "api|:|x"));
         assert_eq!(row.windows, 2);
         assert_eq!(row.activity_ms, 1_700_000_000_000);
         assert!(row.attached);
-        assert_eq!(row.path, "/w/a|:|b");
         assert_eq!(row.managed_by, None);
-        let row = parse_session("$4|:|claude|:|1|:|1700000000|:|0|:|cc-moss|:|/w").unwrap();
+        let row = parse_session("$4|:|1|:|1700000000|:|0|:|cc-moss|:|claude").unwrap();
         assert_eq!(row.managed_by.as_deref(), Some("cc-moss"));
-        assert_eq!(row.path, "/w");
         assert!(parse_session("garbage").is_none());
+        assert!(
+            parse_session("evil|:|1|:|1|:|0|:||:|x").is_none(),
+            "not an id"
+        );
     }
 
     #[test]
     fn parses_a_window_row() {
-        let w = parse_window("$1|:|api|:|@4|:|2|:|vim|:|1|:|3|:|1700000000|:|/w/a").unwrap();
-        assert_eq!(
-            (w.session_id.as_str(), w.session_name.as_str()),
-            ("$1", "api")
-        );
-        assert_eq!((w.id.as_str(), w.index, w.name.as_str()), ("@4", 2, "vim"));
+        let w = parse_window("$1|:|@4|:|2|:|1|:|3|:|1700000000|:|vim|:|x").unwrap();
+        assert_eq!((w.session_id.as_str(), w.id.as_str()), ("$1", "@4"));
+        assert_eq!((w.index, w.name.as_str()), (2, "vim|:|x"));
         assert!(w.active);
         assert_eq!(w.panes, 3);
         assert_eq!(w.activity_ms, 1_700_000_000_000);
-        assert_eq!(w.path, "/w/a");
         assert!(parse_window("$1|:|api").is_none());
     }
 

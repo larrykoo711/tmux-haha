@@ -32,6 +32,9 @@ pub fn ls_json(tmux: &Tmux<ProcessRunner>) -> Result<()> {
 
 /// The session `wanted` names, or a message saying there is none.
 fn session(tmux: &Tmux<ProcessRunner>, wanted: &str, host: Option<&str>) -> Result<SessionInfo> {
+    if wanted.trim().is_empty() {
+        bail!(tr!("give a session name", "请给出会话名"));
+    }
     match direct::find(&tmux.sessions(), wanted, host) {
         Some(s) => Ok(s.clone()),
         None => bail!(tr!(

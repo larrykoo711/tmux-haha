@@ -1,6 +1,6 @@
 //! Blocks of a config file that ta owns, between marker lines. The rest of
-//! the file belongs to the user: a block is added, replaced or removed as a
-//! whole, and removing it puts the file back as it was.
+//! the file belongs to the user: a block is added or replaced as a whole,
+//! and `parts` lets the caller take it out again.
 //! Adapted from cc-moss (MIT, https://github.com/larrykoo711/cc-moss), `moss-core/src/managed_block.rs`.
 
 use anyhow::{bail, Result};
@@ -80,13 +80,16 @@ pub fn upsert(text: &str, tag: &str, body: &str) -> Result<String> {
     })
 }
 
-/// Take the block out, leaving everything else exactly as it was.
-pub fn remove(text: &str, tag: &str) -> Result<String> {
+/// The file around the block and the block's body: `(before, body, after)`.
+pub fn parts(text: &str, tag: &str) -> Result<Option<(String, String, String)>> {
     let (lines, bare) = split(text);
-    Ok(match find(&bare, tag)? {
-        Some((start, end)) => format!("{}{}", lines[..start].concat(), lines[end + 1..].concat()),
-        None => text.to_string(),
-    })
+    Ok(find(&bare, tag)?.map(|(start, end)| {
+        (
+            lines[..start].concat(),
+            lines[start + 1..end].concat(),
+            lines[end + 1..].concat(),
+        )
+    }))
 }
 
 #[cfg(test)]
@@ -104,7 +107,11 @@ mod tests {
         let again = upsert(&once, "ta: t", "line 2").unwrap();
         assert_eq!(again.matches(">>> ta: t >>>").count(), 1);
         assert!(again.contains("line 2") && !again.contains("line 1"));
-        assert_eq!(remove(&again, "ta: t").unwrap(), user);
+        let (before, body, after) = parts(&again, "ta: t").unwrap().unwrap();
+        assert_eq!(
+            (before.as_str(), body.as_str(), after.as_str()),
+            (user, "line 2\n", "")
+        );
         assert!(contains(&again, "ta: t") && !contains(user, "ta: t"));
     }
 
@@ -112,7 +119,7 @@ mod tests {
     fn broken_markers_are_left_for_a_person() {
         let broken = "# >>> ta: t >>>\nx\n";
         assert!(upsert(broken, "ta: t", "y").is_err());
-        assert!(remove(broken, "ta: t").is_err());
+        assert!(parts(broken, "ta: t").is_err());
     }
 
     #[test]

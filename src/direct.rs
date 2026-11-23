@@ -28,9 +28,22 @@ pub fn find<'a>(
     wanted: &str,
     host: Option<&str>,
 ) -> Option<&'a SessionInfo> {
+    if wanted.trim().is_empty() {
+        return None;
+    }
     let clean = naming::sanitize(wanted);
-    let prefixed = naming::session_name(host, wanted);
-    [wanted, clean.as_str(), prefixed.as_str()]
+    // A name of only symbols cleans to the fallback `session`: that is not
+    // what was asked for, so only the name as given counts.
+    let names: Vec<String> = if clean == "session" && wanted.trim() != "session" {
+        vec![wanted.to_string()]
+    } else {
+        vec![
+            wanted.to_string(),
+            clean,
+            naming::session_name(host, wanted),
+        ]
+    };
+    names
         .iter()
         .find_map(|name| sessions.iter().find(|s| s.name == *name))
 }
@@ -77,6 +90,18 @@ mod tests {
             Target::Create("foo".into())
         );
         assert_eq!(resolve(&[], "a b", None), Target::Create("a-b".into()));
+    }
+
+    #[test]
+    fn empty_or_symbol_names_never_mean_session() {
+        let sessions = [session("$1", "session"), session("$2", "box_session")];
+        for wanted in ["", "  ", "...", "$", "::"] {
+            assert_eq!(find(&sessions, wanted, Some("box")), None, "{wanted:?}");
+        }
+        assert_eq!(
+            find(&sessions, "session", None).map(|s| s.id.as_str()),
+            Some("$1")
+        );
     }
 
     #[test]
