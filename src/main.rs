@@ -176,7 +176,15 @@ fn table(sessions: &[SessionInfo], home: &str) -> String {
         };
         let mark = if s.attached { "*" } else { " " };
         let windows = tr!(format!("{} win", s.windows), format!("{} 窗口", s.windows));
-        out.push_str(&format!("{mark} {}{pad}  {windows:<8} {path}\n", s.name));
+        let tool = s
+            .managed_by
+            .as_deref()
+            .map(|t| format!("  ({t})"))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "{mark} {}{pad}  {windows:<8} {path}{tool}\n",
+            s.name
+        ));
     }
     out
 }
@@ -189,6 +197,7 @@ mod tests {
     fn table_aligns_and_shortens_home() {
         i18n::set_for_test(i18n::Lang::En);
         let s = |name: &str, path: &str, attached| SessionInfo {
+            managed_by: None,
             id: "$1".into(),
             name: name.into(),
             windows: 2,
@@ -201,5 +210,20 @@ mod tests {
             "/h/me",
         );
         assert_eq!(out, "* api   2 win    ~/w\n  接口  2 win    /srv\n");
+    }
+
+    #[test]
+    fn table_shows_who_manages_a_session() {
+        i18n::set_for_test(i18n::Lang::En);
+        let s = SessionInfo {
+            managed_by: Some("cc-moss".into()),
+            id: "$1".into(),
+            name: "work".into(),
+            windows: 1,
+            activity_ms: 0,
+            attached: false,
+            path: "/srv".into(),
+        };
+        assert_eq!(table(&[s], "/h"), "  work  1 win    /srv  (cc-moss)\n");
     }
 }

@@ -22,6 +22,7 @@
 
 - Everything in this repo is public: no hostnames, private IPs, account names or credentials.
 - tmux commands that change a session target its id (`$N`), never its name.
+- A session with `@managed-by` set belongs to another tool: only go to it, never rename or close it.
 - Never set global tmux options or key bindings, never end the tmux server: it may be shared with other tools.
 - End-to-end tests run against a private tmux socket (`-L ta-test-…`) and a temporary `HOME`, never the user's tmux server.
 - Before committing, run what CI runs: `cargo fmt --all --check && cargo clippy --all-targets -- -D warnings && cargo test --all`.
