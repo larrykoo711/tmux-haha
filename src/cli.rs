@@ -40,9 +40,31 @@ pub enum Cmd {
     New {
         /// The session's name (default: the folder's).
         name: Option<String>,
+        /// Start it in this folder instead of the current one.
+        #[arg(long, value_name = "DIR")]
+        dir: Option<std::path::PathBuf>,
     },
     /// List sessions; * marks one a terminal is showing.
-    Ls,
+    Ls {
+        /// Machine-readable output (schema 1).
+        #[arg(long)]
+        json: bool,
+    },
+    /// Close a session and everything running in it (asks first).
+    Close {
+        /// The session to close.
+        name: String,
+        /// Don't ask.
+        #[arg(short, long)]
+        yes: bool,
+    },
+    /// Rename a session.
+    Rename {
+        /// The session to rename.
+        name: String,
+        /// Its new name (made one tmux can take; -2, -3… if taken).
+        new_name: String,
+    },
     /// Print the version.
     Version,
 }

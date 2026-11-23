@@ -153,3 +153,117 @@ fn config_language_is_used() {
         .unwrap();
     assert!(stdout(&out).contains("还没有会话"), "{}", stdout(&out));
 }
+
+#[test]
+fn ls_json_has_every_field() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "api"], &work);
+    w.tmux(&["set-option", "-t", "api", "@managed-by", "cc-moss"]);
+    w.ta(&["-d", "plain"], &work);
+    let out = w.ta(&["ls", "--json"], &work);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).unwrap();
+    assert_eq!(v["schema"], 1);
+    let sessions = v["sessions"].as_array().unwrap();
+    let api = sessions.iter().find(|s| s["name"] == "api").unwrap();
+    assert!(api["id"].as_str().unwrap().starts_with('$'), "{api}");
+    assert_eq!(api["windows"], 1);
+    assert_eq!(api["attached"], false);
+    assert!(api["activity"].as_i64().unwrap() > 1_600_000_000, "{api}");
+    assert!(api["path"].as_str().unwrap().ends_with("/work"), "{api}");
+    assert_eq!(api["managed_by"], "cc-moss");
+    let plain = sessions.iter().find(|s| s["name"] == "plain").unwrap();
+    assert!(plain["managed_by"].is_null(), "{plain}");
+}
+
+#[test]
+fn new_in_another_folder() {
+    let w = World::new();
+    let work = w.dir("work");
+    let shop = w.dir("shop");
+    let out = w.ta(&["new", "-d", "--dir", shop.to_str().unwrap()], &work);
+    assert_eq!(stdout(&out), "shop\n", "{}", stderr(&out));
+    let path = w.tmux(&["display-message", "-p", "-t", "shop", "#{session_path}"]);
+    assert_eq!(path.trim(), shop.to_string_lossy());
+    let missing = w.ta(&["new", "-d", "--dir", "/no/such/folder"], &work);
+    assert_eq!(missing.status.code(), Some(1));
+    assert!(
+        stderr(&missing).contains("is not a folder"),
+        "{}",
+        stderr(&missing)
+    );
+    assert_eq!(w.session_names(), ["shop"]);
+}
+
+#[test]
+fn close_with_yes_closes_only_that_one() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "api"], &work);
+    w.ta(&["-d", "api-v2"], &work);
+    let out = w.ta(&["close", "api", "--yes"], &work);
+    assert!(out.status.success(), "{}", stderr(&out));
+    assert_eq!(stdout(&out), "Closed api.\n");
+    assert_eq!(w.session_names(), ["api-v2"]);
+    let gone = w.ta(&["close", "api", "--yes"], &work);
+    assert_eq!(gone.status.code(), Some(1));
+    assert!(
+        stderr(&gone).contains("there is no session called api"),
+        "{}",
+        stderr(&gone)
+    );
+}
+
+#[test]
+fn close_without_yes_off_a_terminal_refuses() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "api"], &work);
+    let out = w
+        .command(&["close", "api"], &work)
+        .stdin(std::process::Stdio::null())
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("add --yes"), "{}", stderr(&out));
+    assert_eq!(w.session_names(), ["api"]);
+}
+
+#[test]
+fn close_refuses_a_managed_session() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "claude"], &work);
+    w.tmux(&["set-option", "-t", "claude", "@managed-by", "cc-moss"]);
+    let out = w.ta(&["close", "claude", "--yes"], &work);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("cc-moss manages this session"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(w.session_names(), ["claude"]);
+}
+
+#[test]
+fn rename_cleans_and_refuses_managed() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "api"], &work);
+    w.ta(&["-d", "taken"], &work);
+    let out = w.ta(&["rename", "api", "taken"], &work);
+    assert_eq!(stdout(&out), "taken-2\n", "{}", stderr(&out));
+    let out = w.ta(&["rename", "taken-2", "my notes"], &work);
+    assert_eq!(stdout(&out), "my-notes\n");
+    assert_eq!(w.session_names(), ["my-notes", "taken"]);
+    w.tmux(&["set-option", "-t", "taken", "@managed-by", "cc-moss"]);
+    let out = w.ta(&["rename", "taken", "other"], &work);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(
+        stderr(&out).contains("cc-moss manages this session"),
+        "{}",
+        stderr(&out)
+    );
+    assert_eq!(w.session_names(), ["my-notes", "taken"]);
+}

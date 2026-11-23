@@ -4,6 +4,7 @@
 mod i18n;
 mod cli;
 mod command;
+mod commands;
 mod config;
 mod direct;
 mod enter;
@@ -61,11 +62,19 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             format!("give a session name or a command, not both (a session named like a command: ta -- {name})"),
             format!("会话名和命令只能给一个（会话名和命令同名时：ta -- {name}）")
         )),
-        (Some(Cmd::Ls), None) => ls(&tmux),
+        (Some(Cmd::Ls { json: true }), None) => commands::ls_json(&tmux),
+        (Some(Cmd::Ls { json: false }), None) => ls(&tmux),
+        (Some(Cmd::Close { name, yes }), None) => commands::close(&tmux, &name, yes, host.as_deref()),
+        (Some(Cmd::Rename { name, new_name }), None) => {
+            commands::rename(&tmux, &name, &new_name, host.as_deref())
+        }
         // Printed before tmux is needed (`main`).
         (Some(Cmd::Version), None) => Ok(()),
-        (Some(Cmd::New { name }), None) => {
-            let cwd = cwd()?;
+        (Some(Cmd::New { name, dir }), None) => {
+            let cwd = match dir {
+                Some(dir) => commands::folder(&dir)?,
+                None => cwd()?,
+            };
             let desired = naming::new_session_name(name.as_deref(), &cwd, host.as_deref());
             let (id, name) = create(&tmux, &desired, &cwd)?;
             arrive(&tmux, &socket, &id, &name, cli.detached)
