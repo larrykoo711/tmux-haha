@@ -5,7 +5,7 @@
 `ta`: one small command to find, start and switch tmux sessions.
 
 ```sh
-ta               # open the picker: type to search, ↑↓ to move, ↵ to go, → to rename or close, esc to quit
+ta               # open the picker: type to search, ↑↓ to move, ↵ to go, → to rename or close, tab for windows, esc to quit
 ta api-review    # go to that session, or start it in this folder and go there
 ta new           # start a session in this folder, named after it (-2, -3… if taken)
 ta ls            # list sessions (* means a terminal is attached)

@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-use crate::tmux::SessionInfo;
+use crate::tmux::{SessionInfo, WindowInfo};
 
 /// A list entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -18,6 +18,38 @@ pub enum Item {
     /// Start a session here (named by the query, if any).
     New,
     Session(SessionInfo),
+    Window(WindowInfo),
+}
+
+/// Which list the picker shows. Tab moves between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tab {
+    Sessions,
+    Windows,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 2] = [Tab::Sessions, Tab::Windows];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tab::Sessions => tr!("Sessions", "会话"),
+            Tab::Windows => tr!("Windows", "窗口"),
+        }
+    }
+
+    fn step(self, back: bool) -> Tab {
+        let i = Tab::ALL.iter().position(|t| *t == self).unwrap_or(0);
+        let n = Tab::ALL.len();
+        Tab::ALL[if back { (i + n - 1) % n } else { (i + 1) % n }]
+    }
+}
+
+/// A session's windows, for the windows tab.
+#[derive(Debug, Clone)]
+pub struct WindowGroup {
+    pub session_name: String,
+    pub windows: Vec<WindowInfo>,
 }
 
 /// Sessions sharing a folder.
@@ -34,11 +66,15 @@ pub enum Row {
     Header(usize),
     /// Group, session within it.
     Session(usize, usize),
+    /// A session's name above its windows.
+    WindowHeader(usize),
+    /// Window group, window within it.
+    Window(usize, usize),
 }
 
 impl Row {
     fn selectable(self) -> bool {
-        !matches!(self, Row::Header(_))
+        !matches!(self, Row::Header(_) | Row::WindowHeader(_))
     }
 }
 
@@ -84,6 +120,11 @@ pub enum Action {
     Quit,
     /// Go to session `$N`.
     Attach(String),
+    /// Go to window `@N` of session `$N`.
+    AttachWindow {
+        session: String,
+        window: String,
+    },
     /// Start a session in the current folder, named by the query if any.
     New {
         name: Option<String>,
@@ -100,7 +141,9 @@ pub enum Action {
 pub struct App {
     pub query: String,
     pub mode: Mode,
+    pub tab: Tab,
     groups: Vec<Group>,
+    window_groups: Vec<WindowGroup>,
     rows: Vec<Row>,
     /// Index into `rows`; always a selectable row.
     pub cursor: usize,
@@ -127,7 +170,9 @@ impl App {
         let mut app = App {
             query: String::new(),
             mode: Mode::Browse,
+            tab: Tab::Sessions,
             groups: Vec::new(),
+            window_groups: Vec::new(),
             rows: Vec::new(),
             cursor: 0,
             message: None,
@@ -142,10 +187,41 @@ impl App {
 
     /// Replace the data, keeping the selection on the same session if it still exists.
     pub fn set_sessions(&mut self, sessions: Vec<SessionInfo>) {
-        let keep = self.selected_id();
-        self.group(sessions);
+        self.keeping_selection(|app| app.group(sessions));
+    }
+
+    /// Replace the windows, keeping the selection on the same window if it still exists.
+    pub fn set_windows(&mut self, windows: Vec<WindowInfo>) {
+        self.keeping_selection(|app| {
+            let mut groups: Vec<WindowGroup> = Vec::new();
+            let mut ids: Vec<String> = Vec::new();
+            for w in windows {
+                match ids.iter().position(|id| *id == w.session_id) {
+                    Some(g) => groups[g].windows.push(w),
+                    None => {
+                        ids.push(w.session_id.clone());
+                        groups.push(WindowGroup {
+                            session_name: w.session_name.clone(),
+                            windows: vec![w],
+                        });
+                    }
+                }
+            }
+            for g in &mut groups {
+                g.windows.sort_by_key(|w| w.index);
+            }
+            let latest = |g: &WindowGroup| g.windows.iter().map(|w| w.activity_ms).max();
+            groups.sort_by_key(|g| std::cmp::Reverse(latest(g)));
+            app.window_groups = groups;
+            app.refilter();
+        });
+    }
+
+    fn keeping_selection(&mut self, change: impl FnOnce(&mut Self)) {
+        let keep = self.key_at(self.cursor);
+        change(self);
         if let Some(keep) = keep {
-            if let Some(i) = (0..self.rows.len()).find(|&i| self.id_at(i) == Some(&keep)) {
+            if let Some(i) = (0..self.rows.len()).find(|&i| self.key_at(i) == Some(keep.clone())) {
                 self.cursor = i;
             }
         }
@@ -177,6 +253,17 @@ impl App {
         &self.groups
     }
 
+    pub fn window_groups(&self) -> &[WindowGroup] {
+        &self.window_groups
+    }
+
+    pub fn window(&self, row: Row) -> Option<&WindowInfo> {
+        match row {
+            Row::Window(g, i) => self.window_groups.get(g)?.windows.get(i),
+            _ => None,
+        }
+    }
+
     pub fn rows(&self) -> &[Row] {
         &self.rows
     }
@@ -191,16 +278,17 @@ impl App {
     pub fn selected(&self) -> Option<Item> {
         match *self.rows.get(self.cursor)? {
             Row::New => Some(Item::New),
+            row @ Row::Window(..) => self.window(row).cloned().map(Item::Window),
             row => self.session(row).cloned().map(Item::Session),
         }
     }
 
-    fn selected_id(&self) -> Option<String> {
-        self.id_at(self.cursor).cloned()
-    }
-
-    fn id_at(&self, row: usize) -> Option<&String> {
-        self.session(*self.rows.get(row)?).map(|s| &s.id)
+    /// What a row stands for, to find it again after a refresh: `$N` or `@N`.
+    fn key_at(&self, row: usize) -> Option<String> {
+        let row = *self.rows.get(row)?;
+        self.session(row)
+            .map(|s| s.id.clone())
+            .or_else(|| self.window(row).map(|w| w.id.clone()))
     }
 
     pub fn is_here(&self, s: &SessionInfo) -> bool {
@@ -210,6 +298,10 @@ impl App {
     /// Search runs over names and folders; groups keep their order unless
     /// searching, sessions in a group are ranked by score.
     fn refilter(&mut self) {
+        if self.tab == Tab::Windows {
+            self.refilter_windows();
+            return;
+        }
         let query = self.query.trim().to_string();
         let mut rows = Vec::new();
         // "New" comes first, one step up from the first session. An exact
@@ -266,6 +358,52 @@ impl App {
             .position(|r| matches!(r, Row::Session(..)))
             .or_else(|| self.rows.iter().position(|r| *r == Row::New))
             .unwrap_or(0);
+    }
+
+    /// Windows match on their own name and their session's.
+    fn refilter_windows(&mut self) {
+        let query = self.query.trim().to_string();
+        let pattern = Pattern::parse(&query, CaseMatching::Ignore, Normalization::Smart);
+        let mut buf = Vec::new();
+        let (mut rows, mut matched, mut total) = (Vec::new(), 0, 0);
+        for (g, group) in self.window_groups.iter().enumerate() {
+            total += group.windows.len();
+            let hits: Vec<usize> = group
+                .windows
+                .iter()
+                .enumerate()
+                .filter(|(_, w)| {
+                    query.is_empty() || {
+                        let text = format!("{} {}", w.name, group.session_name);
+                        pattern
+                            .score(Utf32Str::new(&text, &mut buf), &mut self.matcher)
+                            .is_some()
+                    }
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if hits.is_empty() {
+                continue;
+            }
+            matched += hits.len();
+            rows.push(Row::WindowHeader(g));
+            rows.extend(hits.into_iter().map(|i| Row::Window(g, i)));
+        }
+        self.rows = rows;
+        self.matched = matched;
+        self.total = total;
+        self.cursor = self
+            .rows
+            .iter()
+            .position(|r| matches!(r, Row::Window(..)))
+            .unwrap_or(0);
+    }
+
+    /// Show `tab`, with an empty search.
+    fn switch_to(&mut self, tab: Tab) {
+        self.tab = tab;
+        self.query.clear();
+        self.refilter();
     }
 
     fn names_exactly(&self, query: &str) -> bool {
@@ -336,6 +474,10 @@ impl App {
                 name: Some(self.query.trim().to_string()).filter(|q| !q.is_empty()),
             },
             Some(Item::Session(s)) => Action::Attach(s.id),
+            Some(Item::Window(w)) => Action::AttachWindow {
+                session: w.session_id,
+                window: w.id,
+            },
         }
     }
 
@@ -355,6 +497,14 @@ impl App {
                 Action::None
             }
             KeyCode::Esc => Action::Quit,
+            KeyCode::Tab => {
+                self.switch_to(self.tab.step(false));
+                Action::None
+            }
+            KeyCode::BackTab => {
+                self.switch_to(self.tab.step(true));
+                Action::None
+            }
             KeyCode::Up => {
                 self.move_cursor(false);
                 Action::None
@@ -738,6 +888,82 @@ mod tests {
         let mut app = sample(None);
         typed(&mut app, "billing");
         assert!(matches!(app.selected(), Some(Item::Session(s)) if s.name == "scratch"));
+    }
+
+    fn window(session: (&str, &str), id: &str, index: u32, name: &str, at: i64) -> WindowInfo {
+        WindowInfo {
+            session_id: session.0.into(),
+            session_name: session.1.into(),
+            id: id.into(),
+            index,
+            name: name.into(),
+            active: index == 1,
+            panes: 1,
+            activity_ms: at,
+            path: "/w".into(),
+        }
+    }
+
+    fn with_windows() -> App {
+        let mut app = sample(None);
+        app.set_windows(vec![
+            window(("$1", "api"), "@2", 2, "logs", 5),
+            window(("$1", "api"), "@1", 1, "vim", 4),
+            window(("$3", "scratch"), "@7", 1, "zsh", 9),
+        ]);
+        app
+    }
+
+    #[test]
+    fn keyboard_tab_cycles_tabs() {
+        let mut app = with_windows();
+        assert_eq!(app.tab, Tab::Sessions);
+        app.handle(key(KeyCode::Tab));
+        assert_eq!(app.tab, Tab::Windows);
+        assert!(matches!(app.selected(), Some(Item::Window(_))));
+        app.handle(key(KeyCode::Tab));
+        assert_eq!(app.tab, Tab::Sessions);
+        app.handle(key(KeyCode::BackTab));
+        assert_eq!(app.tab, Tab::Windows);
+    }
+
+    #[test]
+    fn tab_switch_clears_the_search() {
+        let mut app = with_windows();
+        typed(&mut app, "zzz");
+        app.handle(key(KeyCode::Tab));
+        assert!(app.query.is_empty());
+        assert_eq!(app.matched, 3);
+        // → has no menu on the windows tab.
+        app.handle(key(KeyCode::Right));
+        assert_eq!(app.mode, Mode::Browse);
+    }
+
+    #[test]
+    fn windows_are_grouped_and_searchable() {
+        let mut app = with_windows();
+        app.handle(key(KeyCode::Tab));
+        let shown: Vec<&str> = app
+            .rows()
+            .iter()
+            .filter_map(|r| app.window(*r).map(|w| w.name.as_str()))
+            .collect();
+        // Most recent session first; windows in index order.
+        assert_eq!(shown, ["zsh", "vim", "logs"]);
+        typed(&mut app, "logs");
+        assert_eq!(app.matched, 1);
+        assert_eq!(
+            app.handle(key(KeyCode::Enter)),
+            Action::AttachWindow {
+                session: "$1".into(),
+                window: "@2".into()
+            }
+        );
+        // The session's name finds its windows too.
+        let mut app = with_windows();
+        app.handle(key(KeyCode::Tab));
+        typed(&mut app, "scratch");
+        assert_eq!(app.matched, 1);
     }
 
     #[test]

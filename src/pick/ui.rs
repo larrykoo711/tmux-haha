@@ -15,9 +15,9 @@ use ratatui::widgets::{Block, BorderType, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
-use super::app::{App, Item, Mode, Row};
+use super::app::{App, Item, Mode, Row, Tab};
 use crate::i18n::Lang;
-use crate::tmux::SessionInfo;
+use crate::tmux::{SessionInfo, WindowInfo};
 
 /// Secondary text.
 const GREY: Color = Color::Rgb(150, 150, 150);
@@ -121,18 +121,35 @@ fn rule(frame: &mut Frame, area: Rect) {
 }
 
 fn draw_header(frame: &mut Frame, area: Rect, app: &App, view: &View) {
-    let left = Line::from(vec![
+    let mut left = vec![
         Span::styled(" ta", Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)),
         Span::styled(format!("  {}", view.version), Style::new().fg(FAINT)),
-    ]);
+        Span::raw("   "),
+    ];
+    for tab in Tab::ALL {
+        let style = if tab == app.tab {
+            Style::new().fg(ACCENT).add_modifier(Modifier::BOLD)
+        } else {
+            Style::new().fg(FAINT)
+        };
+        left.push(Span::styled(format!(" {} ", tab.label()), style));
+    }
+    let left = Line::from(left);
     let total = app.total;
+    let plural = if total == 1 { "" } else { "s" };
     // Styled span, not a styled line: a line's style covers the whole row
     // and would grey out the name on the left.
     let right = Line::from(Span::styled(
-        tr!(
-            format!("{total} session{} ", if total == 1 { "" } else { "s" }),
-            format!("共 {total} 个会话 "),
-        ),
+        match app.tab {
+            Tab::Sessions => tr!(
+                format!("{total} session{plural} "),
+                format!("共 {total} 个会话 ")
+            ),
+            Tab::Windows => tr!(
+                format!("{total} window{plural} "),
+                format!("共 {total} 个窗口 ")
+            ),
+        },
         grey(),
     ))
     .right_aligned();
@@ -151,10 +168,13 @@ fn draw_search(frame: &mut Frame, area: Rect, app: &App) {
         Line::from(vec![
             Span::styled(" ⌕ ", grey()),
             Span::styled(
-                tr!(
-                    "Find a session, or type a name to start one",
-                    "搜一个会话，或者输入名字开个新的"
-                ),
+                match app.tab {
+                    Tab::Sessions => tr!(
+                        "Find a session, or type a name to start one",
+                        "搜一个会话，或者输入名字开个新的"
+                    ),
+                    Tab::Windows => tr!("Find a window", "搜一个窗口"),
+                },
                 Style::new().fg(FAINT),
             ),
         ])
@@ -229,6 +249,29 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
                     row: Some(i),
                 });
             }
+            Row::WindowHeader(g) => {
+                if !lines.is_empty() {
+                    lines.push(ListLine {
+                        line: Line::raw(""),
+                        row: None,
+                    });
+                }
+                let name = &app.window_groups()[*g].session_name;
+                lines.push(ListLine {
+                    line: Line::styled(
+                        format!(" {}", fit(name, width.saturating_sub(1))),
+                        Style::new().fg(GREY).add_modifier(Modifier::BOLD),
+                    ),
+                    row: None,
+                });
+            }
+            Row::Window(..) => {
+                let w = app.window(*row).expect("window row");
+                lines.push(ListLine {
+                    line: window_row(w, app, view, width, i == app.cursor),
+                    row: Some(i),
+                });
+            }
         }
         if i == app.cursor {
             cursor_line = lines.len() - 1;
@@ -237,6 +280,12 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
         }
     }
 
+    if app.rows().is_empty() && app.tab == Tab::Windows && app.query.trim().is_empty() {
+        lines.push(ListLine {
+            line: Line::styled(tr!("  No windows yet.", "  还没有窗口。"), grey()),
+            row: None,
+        });
+    }
     let height = area.height as usize;
     let top = (cursor_line + 1).saturating_sub(height);
     let mut hits = HitMap::default();
@@ -309,6 +358,37 @@ fn list_row(
         Style::new()
     };
     spans.extend(highlighted(&fit(&s.name, room), &app.query, name_style));
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    spans.push(Span::raw(
+        " ".repeat(width.saturating_sub(used + age.width() + 1)),
+    ));
+    spans.push(Span::styled(age, Style::new().fg(FAINT)));
+    Line::from(spans)
+}
+
+/// `● 2: logs ……… 3m`: one line per window; the dot marks its session's current window.
+fn window_row(
+    w: &WindowInfo,
+    app: &App,
+    view: &View,
+    width: usize,
+    selected: bool,
+) -> Line<'static> {
+    let age = short_ago(view.now_ms - w.activity_ms);
+    let label = format!("{}: {}", w.index, w.name);
+    let room = width.saturating_sub(5 + age.width() + 2);
+    let dot = if w.active {
+        Span::styled("●", Style::new().fg(ACCENT))
+    } else {
+        Span::styled("○", Style::new().fg(FAINT))
+    };
+    let mut spans = vec![Span::raw("  "), dot, Span::raw(" ")];
+    let style = if selected {
+        Style::new().add_modifier(Modifier::BOLD)
+    } else {
+        Style::new()
+    };
+    spans.extend(highlighted(&fit(&label, room), &app.query, style));
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     spans.push(Span::raw(
         " ".repeat(width.saturating_sub(used + age.width() + 1)),
@@ -459,6 +539,30 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
             }
             s.name.clone()
         }
+        Item::Window(w) => {
+            lines.push(Line::styled(
+                format!("{}: {}", w.index, w.name),
+                Style::new().add_modifier(Modifier::BOLD),
+            ));
+            let panes = tr!(
+                format!("{} pane{}", w.panes, if w.panes == 1 { "" } else { "s" }),
+                format!("{} 个窗格", w.panes)
+            );
+            lines.push(Line::styled(
+                format!(
+                    "{}  ·  {panes}  ·  {}",
+                    w.session_name,
+                    long_ago(view.now_ms - w.activity_ms)
+                ),
+                grey(),
+            ));
+            lines.push(Line::raw(""));
+            lines.push(label(tr!("Folder", "目录")));
+            lines.push(Line::raw(tilde(&w.path, view.home)));
+            lines.push(Line::raw(""));
+            lines.push(Line::from(vec![key("↵"), word(tr!(" Go there", " 进入"))]));
+            String::new()
+        }
     };
     let inner = Rect::new(
         area.x + 1,
@@ -586,7 +690,7 @@ fn cols(text: &str) -> u16 {
 fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
     let key = |k: &str| Span::styled(k.to_string(), Style::new().add_modifier(Modifier::BOLD));
     let word = |w: &str| Span::styled(w.to_string(), grey());
-    let gap = || Span::raw("     ");
+    let gap = || Span::raw("    ");
     let parts: Vec<Span> = if let Some(m) = &app.message {
         vec![Span::styled(format!(" {m}"), Style::new().fg(AMBER))]
     } else {
@@ -601,7 +705,7 @@ fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
                 } else {
                     tr!(" clear", " 清空")
                 };
-                vec![
+                let mut parts = vec![
                     Span::raw(" "),
                     key("↑↓"),
                     word(tr!(" move", " 移动")),
@@ -609,12 +713,18 @@ fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
                     key("↵"),
                     word(open),
                     gap(),
-                    key("→"),
-                    word(tr!(" more", " 更多")),
+                ];
+                if app.tab == Tab::Sessions {
+                    parts.extend([key("→"), word(tr!(" more", " 更多")), gap()]);
+                }
+                parts.extend([
+                    key("tab"),
+                    word(tr!(" switch", " 切页")),
                     gap(),
                     key("esc"),
                     word(esc),
-                ]
+                ]);
+                parts
             }
             Mode::Menu { .. } => vec![
                 Span::raw(" "),
@@ -827,6 +937,64 @@ mod tests {
         let name_x = (0..40).find(|&x| buf[(x, y)].symbol() == "a").unwrap();
         assert_eq!(buf[(name_x, y)].bg, BAND);
         assert_eq!(buf[(name_x, y)].fg, ON_BAND);
+    }
+
+    fn with_windows() -> App {
+        let mut app = sample();
+        let w = |sid: &str, sname: &str, id: &str, index, name: &str| WindowInfo {
+            session_id: sid.into(),
+            session_name: sname.into(),
+            id: id.into(),
+            index,
+            name: name.into(),
+            active: index == 1,
+            panes: 2,
+            activity_ms: 300_000,
+            path: "/home/u/acme".into(),
+        };
+        app.set_windows(vec![
+            w("$1", "api-gateway", "@1", 1, "vim"),
+            w(
+                "$1",
+                "api-gateway",
+                "@2",
+                2,
+                "a-window-with-a-name-far-too-long-for-any-list",
+            ),
+            w("$2", "接口评审", "@3", 1, "日志"),
+        ]);
+        app.handle(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        app
+    }
+
+    #[test]
+    fn windows_tab_fits_every_width() {
+        crate::i18n::set_for_test(Lang::Zh);
+        for w in [120, 90, 80, 60] {
+            let text = render(&with_windows(), w, 24);
+            for line in text.lines() {
+                assert!(line.width() <= w as usize, "{w}: {line:?}");
+            }
+            assert!(text.contains(" 窗口 "), "{w}\n{text}");
+            assert!(text.contains("1: vim"), "{w}\n{text}");
+            assert!(text.contains("1: 日志"), "{w}\n{text}");
+            assert!(text.contains("共 3 个窗口"), "{w}\n{text}");
+        }
+        crate::i18n::set_for_test(Lang::En);
+        let text = render(&with_windows(), 120, 24);
+        assert!(text.contains("api-gateway  ·  2 panes"), "{text}");
+        assert!(!text.contains("→ more"), "{text}");
+        assert!(text.contains("tab switch"), "{text}");
+    }
+
+    #[test]
+    fn empty_windows_tab_says_so() {
+        crate::i18n::set_for_test(Lang::En);
+        let mut app = App::new(vec![], None);
+        app.handle(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+        let text = render(&app, 100, 20);
+        assert!(text.contains("No windows yet."), "{text}");
+        assert!(text.contains("Find a window"), "{text}");
     }
 
     #[test]
