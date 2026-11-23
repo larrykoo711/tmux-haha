@@ -67,6 +67,14 @@ pub enum Cmd {
     },
     /// Print the version.
     Version,
+    /// Check that ta can do its job here: tmux, the server, the config, zoxide.
+    Doctor,
+    /// Show the config file and where each setting's value comes from.
+    Config {
+        /// Print only the config file's path.
+        #[arg(long)]
+        path: bool,
+    },
 }
 
 /// The parsed command line. Help, version flags and usage mistakes are

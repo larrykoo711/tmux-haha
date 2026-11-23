@@ -51,6 +51,13 @@ pub const TEXT: &[(&str, &str, &str)] = &[
         "新名字（按 tmux 能接受的写法；重名加 -2、-3…）",
     ),
     ("version", "", "显示版本"),
+    (
+        "doctor",
+        "",
+        "体检：tmux、server、配置文件、zoxide 是否都正常",
+    ),
+    ("config", "", "显示配置文件位置，以及每项设置的值从哪来"),
+    ("config", "path", "只打印配置文件的路径"),
 ];
 
 /// `cmd` with Chinese text, headings and help flags, for help output.

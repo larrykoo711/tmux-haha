@@ -223,6 +223,14 @@ impl<R: Runner> Tmux<R> {
             .run(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>())
     }
 
+    /// `tmux -V` (e.g. `tmux 3.6`); `None` when tmux can't be run.
+    pub fn version(&self) -> Option<String> {
+        self.run(&["-V"])
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    }
+
     /// Whether tmux can be run at all.
     pub fn installed(&self) -> Result<()> {
         match self.run(&["-V"]) {

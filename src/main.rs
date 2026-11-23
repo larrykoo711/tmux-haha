@@ -7,11 +7,13 @@ mod command;
 mod commands;
 mod config;
 mod direct;
+mod doctor;
 mod enter;
 mod folders;
 mod help_zh;
 mod naming;
 mod pick;
+mod settings;
 mod tmux;
 mod version;
 
@@ -32,6 +34,31 @@ fn main() -> ExitCode {
     if cli.version || matches!(cli.command, Some(Cmd::Version)) {
         version::print();
         return ExitCode::SUCCESS;
+    }
+    // These two work with a broken config: they are how you find what's wrong.
+    let checked = match &cli.command {
+        Some(Cmd::Doctor) => Some(doctor::run(
+            &Tmux::with_socket(Socket::from_config(
+                config::socket(
+                    cli.socket.as_deref(),
+                    config.as_ref().unwrap_or(&config::Config::default()),
+                )
+                .as_deref(),
+            )),
+            &config,
+        )),
+        Some(Cmd::Config { path }) => Some(settings::show(cli.socket.as_deref(), &config, *path)),
+        _ => None,
+    };
+    if let Some(result) = checked {
+        return match result {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(e) => {
+                eprintln!("ta: {}", explain(&e));
+                ExitCode::FAILURE
+            }
+        };
     }
     match config.and_then(|c| run(cli, &c)) {
         Ok(()) => ExitCode::SUCCESS,
@@ -69,7 +96,7 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             commands::rename(&tmux, &name, &new_name, host.as_deref())
         }
         // Printed before tmux is needed (`main`).
-        (Some(Cmd::Version), None) => Ok(()),
+        (Some(Cmd::Version | Cmd::Doctor | Cmd::Config { .. }), None) => Ok(()),
         (Some(Cmd::New { name, dir }), None) => {
             let cwd = match dir {
                 Some(dir) => commands::folder(&dir)?,

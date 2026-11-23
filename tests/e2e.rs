@@ -267,3 +267,94 @@ fn rename_cleans_and_refuses_managed() {
     );
     assert_eq!(w.session_names(), ["my-notes", "taken"]);
 }
+
+#[test]
+fn doctor_checks_everything() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.config("[folders]\nroots = [\"~/work\"]\n");
+    w.ta(&["-d", "api"], &work);
+    let out = w.ta(&["doctor"], &work);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(0), "{text}");
+    assert!(text.contains("✓ tmux") && text.contains("tmux 3"), "{text}");
+    assert!(text.contains("1 session(s)"), "{text}");
+    assert!(
+        text.contains("✓ config") && text.contains("~/.config/ta/config.toml"),
+        "{text}"
+    );
+    assert!(
+        text.contains("✓ folder root") && text.contains("~/work"),
+        "{text}"
+    );
+    assert!(text.contains("ta is ready."), "{text}");
+}
+
+#[test]
+fn doctor_reports_a_broken_config() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.config("sockett = \"x\"\n");
+    let out = w.ta(&["doctor"], &work);
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("✗ config") && text.contains("sockett"),
+        "{text}"
+    );
+    // The other checks still ran.
+    assert!(text.contains("✓ tmux"), "{text}");
+    assert!(text.contains("1 thing(s) to fix above."), "{text}");
+    // config shows the mistake too, instead of failing to start.
+    let out = w.ta(&["config"], &work);
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stdout(&out).contains("sockett"), "{}", stdout(&out));
+}
+
+#[test]
+fn doctor_without_tmux() {
+    let w = World::new();
+    let work = w.dir("work");
+    let empty = w.dir("empty-path");
+    let out = w
+        .command(&["doctor"], &work)
+        .env("PATH", &empty)
+        .output()
+        .unwrap();
+    let text = stdout(&out);
+    assert_eq!(out.status.code(), Some(1), "{text}");
+    assert!(
+        text.contains("✗ tmux") && text.contains("not installed"),
+        "{text}"
+    );
+    assert!(text.contains("! zoxide"), "{text}");
+}
+
+#[test]
+fn config_says_where_each_value_comes_from() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.config("host_prefix = true\nlanguage = \"en\"\n");
+    let text = stdout(&w.ta(&["config"], &work));
+    let line = |key: &str| {
+        text.lines()
+            .find(|l| l.trim_start().starts_with(key))
+            .unwrap_or_else(|| panic!("{key}: {text}"))
+            .to_string()
+    };
+    assert!(line("socket").ends_with("TA_TMUX_SOCKET"), "{text}");
+    assert!(
+        line("host_prefix").contains("true") && line("host_prefix").ends_with("config file"),
+        "{text}"
+    );
+    assert!(line("language").ends_with("TA_LANG"), "{text}");
+    assert!(line("folders.roots").ends_with("default"), "{text}");
+    let from_flag = stdout(&w.ta(&["config", "--socket", "other"], &work));
+    assert!(
+        from_flag.contains("other") && from_flag.contains("--socket"),
+        "{from_flag}"
+    );
+    let path = stdout(&w.ta(&["config", "--path"], &work));
+    assert!(path.trim().ends_with(".config/ta/config.toml"), "{path}");
+    assert_eq!(path.lines().count(), 1);
+}
