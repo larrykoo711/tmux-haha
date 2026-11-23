@@ -149,6 +149,10 @@ fn draw_header(frame: &mut Frame, area: Rect, app: &App, view: &View) {
                 format!("{total} window{plural} "),
                 format!("共 {total} 个窗口 ")
             ),
+            Tab::Folders => tr!(
+                format!("{total} folder{plural} "),
+                format!("共 {total} 个目录 ")
+            ),
         },
         grey(),
     ))
@@ -174,6 +178,7 @@ fn draw_search(frame: &mut Frame, area: Rect, app: &App) {
                         "搜一个会话，或者输入名字开个新的"
                     ),
                     Tab::Windows => tr!("Find a window", "搜一个窗口"),
+                    Tab::Folders => tr!("Find a folder to work in", "搜一个目录，在那里开会话"),
                 },
                 Style::new().fg(FAINT),
             ),
@@ -272,6 +277,13 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
                     row: Some(i),
                 });
             }
+            Row::Folder(_) => {
+                let path = app.folder(*row).expect("folder row");
+                lines.push(ListLine {
+                    line: folder_row(path, app, view, width, i == app.cursor),
+                    row: Some(i),
+                });
+            }
         }
         if i == app.cursor {
             cursor_line = lines.len() - 1;
@@ -280,11 +292,29 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
         }
     }
 
-    if app.rows().is_empty() && app.tab == Tab::Windows && app.query.trim().is_empty() {
-        lines.push(ListLine {
-            line: Line::styled(tr!("  No windows yet.", "  还没有窗口。"), grey()),
-            row: None,
-        });
+    if app.rows().is_empty() && app.query.trim().is_empty() {
+        let empty: &[&str] = match app.tab {
+            Tab::Sessions => &[],
+            Tab::Windows => &[tr!("  No windows yet.", "  还没有窗口。")],
+            // Each line fits the narrowest list (34 columns).
+            Tab::Folders => &[
+                tr!(
+                    "  No folders yet. Install zoxide,",
+                    "  还没有目录。装上 zoxide，"
+                ),
+                tr!(
+                    "  or set [folders] roots in",
+                    "  或在 ~/.config/ta/config.toml"
+                ),
+                tr!("  ~/.config/ta/config.toml", "  里写 [folders] roots"),
+            ],
+        };
+        for text in empty {
+            lines.push(ListLine {
+                line: Line::styled(fit(text, width), grey()),
+                row: None,
+            });
+        }
     }
     let height = area.height as usize;
     let top = (cursor_line + 1).saturating_sub(height);
@@ -395,6 +425,53 @@ fn window_row(
     ));
     spans.push(Span::styled(age, Style::new().fg(FAINT)));
     Line::from(spans)
+}
+
+/// `● webshop  ~/code`: a folder, its parent faint; the dot is filled when a
+/// session already runs there.
+fn folder_row(path: &str, app: &App, view: &View, width: usize, selected: bool) -> Line<'static> {
+    let (parent, name) = split_folder(path, view.home);
+    let dot = if app.session_in(path).is_some() {
+        Span::styled("●", Style::new().fg(ACCENT))
+    } else {
+        Span::styled("○", Style::new().fg(FAINT))
+    };
+    let style = if selected {
+        Style::new().add_modifier(Modifier::BOLD)
+    } else {
+        Style::new()
+    };
+    // The parent tells same-named folders apart: keep up to a third of the
+    // row for it, the rest for the name.
+    let parent_room = (parent.width() + 2).min(width / 3);
+    let name = fit(&name, width.saturating_sub(6 + parent_room));
+    let mut spans = vec![Span::raw("  "), dot, Span::raw(" ")];
+    spans.extend(highlighted(&name, &app.query, style));
+    let used: usize = spans.iter().map(|s| s.content.width()).sum();
+    let room = width.saturating_sub(used + 3);
+    if room > 4 {
+        spans.push(Span::styled(
+            format!("  {}", fit(&parent, room)),
+            Style::new().fg(FAINT),
+        ));
+    }
+    Line::from(spans)
+}
+
+/// `/home/u/code/web` → (`~/code`, `web`).
+fn split_folder(path: &str, home: Option<&str>) -> (String, String) {
+    let t = tilde(path, home);
+    match t.trim_end_matches('/').rsplit_once('/') {
+        Some((parent, name)) if !name.is_empty() => (
+            if parent.is_empty() {
+                "/".into()
+            } else {
+                parent.to_string()
+            },
+            name.to_string(),
+        ),
+        _ => (String::new(), t),
+    }
 }
 
 /// The name with the characters matching the search picked out.
@@ -563,6 +640,37 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
             lines.push(Line::from(vec![key("↵"), word(tr!(" Go there", " 进入"))]));
             String::new()
         }
+        Item::Folder { path, session } => {
+            let (_, name) = split_folder(path, view.home);
+            lines.push(Line::styled(
+                name,
+                Style::new().add_modifier(Modifier::BOLD),
+            ));
+            lines.push(match session {
+                Some(s) => Line::from(vec![
+                    Span::styled("● ", Style::new().fg(ACCENT)),
+                    Span::styled(
+                        tr!(
+                            format!("{} is open here", s.name),
+                            format!("{} 已经在这里", s.name)
+                        ),
+                        Style::new().fg(ACCENT),
+                    ),
+                ]),
+                None => Line::styled(tr!("No session here yet", "这里还没有会话"), grey()),
+            });
+            lines.push(Line::raw(""));
+            lines.push(label(tr!("Folder", "目录")));
+            lines.push(Line::raw(tilde(path, view.home)));
+            lines.push(Line::raw(""));
+            let act = if session.is_some() {
+                tr!(" Go there", " 进入")
+            } else {
+                tr!(" Start a session here", " 在这里新建会话")
+            };
+            lines.push(Line::from(vec![key("↵"), word(act)]));
+            String::new()
+        }
     };
     let inner = Rect::new(
         area.x + 1,
@@ -697,7 +805,9 @@ fn draw_hint(frame: &mut Frame, area: Rect, app: &App) {
         match &app.mode {
             Mode::Browse => {
                 let open = match app.selected() {
-                    Some(Item::New) => tr!(" start", " 新建"),
+                    Some(Item::New | Item::Folder { session: None, .. }) => {
+                        tr!(" start", " 新建")
+                    }
                     _ => tr!(" open", " 进入"),
                 };
                 let esc = if app.query.is_empty() {
@@ -937,6 +1047,52 @@ mod tests {
         let name_x = (0..40).find(|&x| buf[(x, y)].symbol() == "a").unwrap();
         assert_eq!(buf[(name_x, y)].bg, BAND);
         assert_eq!(buf[(name_x, y)].fg, ON_BAND);
+    }
+
+    fn with_folders() -> App {
+        let mut app = sample();
+        app.set_folders(vec![
+            "/home/u/acme".into(),
+            "/home/u/code/a-folder-with-a-name-far-too-long-for-any-list-at-all".into(),
+            "/srv/接口".into(),
+        ]);
+        app.handle(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        app
+    }
+
+    #[test]
+    fn folders_tab_fits_every_width() {
+        crate::i18n::set_for_test(Lang::Zh);
+        for w in [120, 90, 80, 60] {
+            let text = render(&with_folders(), w, 24);
+            for line in text.lines() {
+                assert!(line.width() <= w as usize, "{w}: {line:?}");
+            }
+            assert!(text.contains(" 目录 "), "{w}\n{text}");
+            assert!(text.contains("接口"), "{w}\n{text}");
+            assert!(text.contains("共 3 个目录"), "{w}\n{text}");
+        }
+        crate::i18n::set_for_test(Lang::En);
+        let text = render(&with_folders(), 120, 24);
+        // ~/acme has a session: the card says which.
+        assert!(text.contains("api-gateway is open here"), "{text}");
+        assert!(text.contains("↵ open"), "{text}");
+        let mut app = with_folders();
+        app.handle(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let text = render(&app, 120, 24);
+        assert!(text.contains("No session here yet"), "{text}");
+        assert!(text.contains("↵ start"), "{text}");
+        assert!(text.contains("~/code"), "{text}");
+    }
+
+    #[test]
+    fn empty_folders_tab_says_how_to_add_some() {
+        crate::i18n::set_for_test(Lang::En);
+        let mut app = App::new(vec![], None);
+        app.handle(KeyEvent::new(KeyCode::BackTab, KeyModifiers::NONE));
+        let text = render(&app, 100, 20);
+        assert!(text.contains("No folders yet."), "{text}");
+        assert!(text.contains("[folders] roots"), "{text}");
     }
 
     fn with_windows() -> App {

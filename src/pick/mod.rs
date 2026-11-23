@@ -34,13 +34,19 @@ fn now_ms() -> i64 {
 }
 
 /// Open the picker; then go where it was asked to.
-pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket, host: Option<&str>) -> Result<()> {
+pub fn run(
+    tmux: &Tmux<ProcessRunner>,
+    socket: &Socket,
+    host: Option<&str>,
+    roots: &[String],
+) -> Result<()> {
     let here = tmux.current_session(
         std::env::var("TMUX").ok().as_deref(),
         std::env::var("TMUX_PANE").ok().as_deref(),
     );
     let mut app = App::new(tmux.sessions(), here);
     app.set_windows(tmux.windows());
+    app.set_folders(crate::folders::candidates(crate::folders::zoxide(), roots));
     let home = std::env::var("HOME").ok();
     let cwd = crate::cwd()?;
     let mut view = ui::View {
@@ -57,6 +63,11 @@ pub fn run(tmux: &Tmux<ProcessRunner>, socket: &Socket, host: Option<&str>) -> R
     // The screen is restored: hand the terminal to whatever comes next.
     match action {
         Action::Attach(id) => crate::enter::enter(tmux, socket, &id),
+        Action::NewIn(folder) => {
+            let desired = naming::new_session_name(None, &folder, host);
+            let (id, _) = crate::create(tmux, &desired, &folder)?;
+            crate::enter::enter(tmux, socket, &id)
+        }
         Action::AttachWindow { session, window } => {
             crate::enter::enter_window(tmux, socket, &session, &window)
         }

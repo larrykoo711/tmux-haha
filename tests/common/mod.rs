@@ -49,6 +49,9 @@ impl World {
             .env_remove("TMUX_PANE")
             // Never the real config: CI runners set XDG_CONFIG_HOME.
             .env_remove("XDG_CONFIG_HOME")
+            // Nor the real zoxide database.
+            .env_remove("_ZO_DATA_DIR")
+            .env_remove("XDG_DATA_HOME")
             .env("TA_TMUX_SOCKET", &self.socket)
             .env("TA_LANG", "en")
             .env("HOME", self.home());
@@ -86,8 +89,14 @@ impl World {
             ])
             .arg(cwd)
             .arg("env")
-            .arg("-u")
-            .arg("XDG_CONFIG_HOME")
+            .args([
+                "-u",
+                "XDG_CONFIG_HOME",
+                "-u",
+                "_ZO_DATA_DIR",
+                "-u",
+                "XDG_DATA_HOME",
+            ])
             .arg(format!("TA_TMUX_SOCKET={}", self.socket))
             .arg("TA_LANG=en")
             .arg(format!("HOME={}", home.display()))
@@ -119,6 +128,13 @@ impl World {
     pub fn type_text(&self, text: &str) {
         self.tmux(&["send-keys", "-t", "driver", "-l", text]);
         std::thread::sleep(Duration::from_millis(100));
+    }
+
+    /// Write `~/.config/ta/config.toml` in the temporary HOME.
+    pub fn config(&self, text: &str) {
+        let dir = self.home().join(".config/ta");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("config.toml"), text).unwrap();
     }
 
     pub fn session_names(&self) -> Vec<String> {
