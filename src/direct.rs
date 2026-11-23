@@ -16,14 +16,23 @@ pub enum Target {
 /// machine's prefix (`box_my-notes`) when there is one, else a new session
 /// named as ta names new ones. Never a prefix match: `foo` is not `foo-bar`.
 pub fn resolve(sessions: &[SessionInfo], wanted: &str, host: Option<&str>) -> Target {
+    match find(sessions, wanted, host) {
+        Some(s) => Target::Existing(s.id.clone()),
+        None => Target::Create(naming::session_name(host, wanted)),
+    }
+}
+
+/// The session `wanted` names, by the same rules as [`resolve`], if any.
+pub fn find<'a>(
+    sessions: &'a [SessionInfo],
+    wanted: &str,
+    host: Option<&str>,
+) -> Option<&'a SessionInfo> {
     let clean = naming::sanitize(wanted);
     let prefixed = naming::session_name(host, wanted);
     [wanted, clean.as_str(), prefixed.as_str()]
         .iter()
         .find_map(|name| sessions.iter().find(|s| s.name == *name))
-        .map_or(Target::Create(prefixed.clone()), |s| {
-            Target::Existing(s.id.clone())
-        })
 }
 
 #[cfg(test)]

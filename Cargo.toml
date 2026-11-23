@@ -17,9 +17,11 @@ path = "src/main.rs"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
 crossterm = "0.29"
 nucleo-matcher = "0.3"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 toml = "1"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm", "unstable-rendered-line-info"] }
 unicode-width = "0.2"

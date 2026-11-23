@@ -151,14 +151,10 @@ fn name_of(tmux: &Tmux<ProcessRunner>, id: &str) -> String {
         .map_or_else(|| id.to_string(), |s| s.name)
 }
 
-/// Rename `$N` to `wanted`, as tmux can take it and unique on the server.
+/// Rename `$N` to `wanted`; what the hint line says about it.
 fn rename(tmux: &Tmux<ProcessRunner>, id: &str, wanted: &str) -> String {
-    let sessions = tmux.sessions();
-    let current = sessions.iter().find(|s| s.id == id).map(|s| s.name.clone());
-    let taken: Vec<String> = sessions.into_iter().map(|s| s.name).collect();
-    let name = naming::unique(&naming::sanitize(wanted), &taken, current.as_deref());
-    match tmux.rename_session(id, &name) {
-        Ok(()) => tr!(format!("Renamed to {name}."), format!("已改名为 {name}。")),
+    match crate::commands::rename_session(tmux, id, wanted) {
+        Ok(name) => tr!(format!("Renamed to {name}."), format!("已改名为 {name}。")),
         Err(e) => tr!(
             format!("Could not rename it: {e:#}"),
             format!("没能改名：{e:#}")

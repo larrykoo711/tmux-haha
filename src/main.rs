@@ -2,56 +2,74 @@
 
 #[macro_use]
 mod i18n;
+mod block;
+mod cli;
 mod command;
+mod commands;
 mod config;
+mod confirm;
 mod direct;
+mod doctor;
 mod enter;
 mod folders;
+mod help_zh;
+mod install;
 mod naming;
 mod pick;
+mod settings;
 mod tmux;
+mod update;
+mod version;
 
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
 use unicode_width::UnicodeWidthStr;
 
+use cli::{Cli, Cmd};
 use direct::Target;
 use tmux::{Access, DuplicateName, NotInstalled, ProcessRunner, SessionInfo, Socket, Tmux};
 
-/// Find, start and switch tmux sessions.
-#[derive(Parser)]
-#[command(name = "ta", version)]
-struct Cli {
-    /// The tmux server: a socket name (`tmux -L`) or path (`tmux -S`). Default: tmux's own.
-    #[arg(long, env = "TA_TMUX_SOCKET", global = true, value_name = "NAME|PATH")]
-    socket: Option<String>,
-
-    /// Start or find the session, print its name, but don't go there.
-    #[arg(short, long, global = true)]
-    detached: bool,
-
-    #[command(subcommand)]
-    command: Option<Cmd>,
-
-    /// Go to the session with this name, starting it in this folder if there is none.
-    /// (`ta -- ls` for a session named like a command.)
-    name: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    /// Start a new session in this folder, named after it unless you give a name.
-    New { name: Option<String> },
-    /// List sessions.
-    Ls,
-}
-
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // The config first: its `language` decides the help's language too.
     let config = config::load();
     i18n::set_config_language(config.as_ref().ok().and_then(|c| c.language.clone()));
+    let cli = cli::parse();
+    if cli.version || matches!(cli.command, Some(Cmd::Version)) {
+        version::print();
+        return ExitCode::SUCCESS;
+    }
+    // These two work with a broken config: they are how you find what's wrong.
+    let checked = match &cli.command {
+        Some(Cmd::Doctor) => Some(doctor::run(
+            &Tmux::with_socket(Socket::from_config(
+                config::socket(
+                    cli.socket.as_deref(),
+                    config.as_ref().unwrap_or(&config::Config::default()),
+                )
+                .as_deref(),
+            )),
+            &config,
+        )),
+        Some(Cmd::Config { path }) => Some(settings::show(cli.socket.as_deref(), &config, *path)),
+        Some(Cmd::Completions { shell }) => {
+            print!("{}", install::completions(*shell));
+            Some(Ok(true))
+        }
+        // Needs no tmux and no config.
+        Some(Cmd::Update { check, yes }) => Some(update::run(*check, *yes).map(|()| true)),
+        _ => None,
+    };
+    if let Some(result) = checked {
+        return match result {
+            Ok(true) => ExitCode::SUCCESS,
+            Ok(false) => ExitCode::FAILURE,
+            Err(e) => {
+                eprintln!("ta: {}", explain(&e));
+                ExitCode::FAILURE
+            }
+        };
+    }
     match config.and_then(|c| run(cli, &c)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -81,9 +99,45 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             format!("give a session name or a command, not both (a session named like a command: ta -- {name})"),
             format!("会话名和命令只能给一个（会话名和命令同名时：ta -- {name}）")
         )),
-        (Some(Cmd::Ls), None) => ls(&tmux),
-        (Some(Cmd::New { name }), None) => {
-            let cwd = cwd()?;
+        (Some(Cmd::Ls { json: true }), None) => commands::ls_json(&tmux),
+        (Some(Cmd::Ls { json: false }), None) => ls(&tmux),
+        (Some(Cmd::Close { name, yes }), None) => commands::close(&tmux, &name, yes, host.as_deref()),
+        (Some(Cmd::Rename { name, new_name }), None) => {
+            commands::rename(&tmux, &name, &new_name, host.as_deref())
+        }
+        // Printed before tmux is needed (`main`).
+        (
+            Some(
+                Cmd::Version
+                | Cmd::Doctor
+                | Cmd::Config { .. }
+                | Cmd::Update { .. }
+                | Cmd::Completions { .. },
+            ),
+            None,
+        ) => Ok(()),
+        (
+            Some(Cmd::Install {
+                yes,
+                uninstall,
+                shell,
+                no_tmux_key,
+            }),
+            None,
+        ) => install::run(
+            &tmux,
+            install::Options {
+                yes,
+                uninstall,
+                shell,
+                no_tmux_key,
+            },
+        ),
+        (Some(Cmd::New { name, dir }), None) => {
+            let cwd = match dir {
+                Some(dir) => commands::folder(&dir)?,
+                None => cwd()?,
+            };
             let desired = naming::new_session_name(name.as_deref(), &cwd, host.as_deref());
             let (id, name) = create(&tmux, &desired, &cwd)?;
             arrive(&tmux, &socket, &id, &name, cli.detached)

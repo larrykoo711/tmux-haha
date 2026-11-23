@@ -11,6 +11,18 @@ ta new           # start a session in this folder, named after it (-2, -3… if 
 ta ls            # list sessions (* means a terminal is attached)
 ```
 
+More commands (`ta help` lists them all, `ta help <command>` explains one; help is in Chinese when your system is):
+
+| Command | What it does |
+|---|---|
+| `ta close <name>` / `ta rename <name> <new>` | Close (asks first, `--yes` doesn't) / rename, by the picker's rules |
+| `ta ls --json` · `ta new --dir <folder>` | A list for scripts; start a session in another folder |
+| `ta doctor` | Checks tmux, the server, the config, zoxide and completions |
+| `ta config` | Where the config file is, and each setting's value and source |
+| `ta update` | Installs a new version the way you installed ta (`--check` only looks); online only when you run it |
+| `ta install` | Shell completions and, if you want, a tmux key `prefix + T` that opens `ta` in a popup (asks for each; `--uninstall` takes it out) |
+| `ta version` | The version |
+
 - In the picker, ↵ on a search with no match starts a session with that name. Closing a session asks first (Keep is the default), and the session you are in can't be closed from there.
 - The folders tab lists the folders zoxide knows and the ones inside `[folders] roots` from the config; ↵ goes to the session already in that folder, or starts one there.
 - Inside tmux it switches to the session; outside tmux it attaches.
