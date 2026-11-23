@@ -6,6 +6,7 @@ mod cli;
 mod command;
 mod commands;
 mod config;
+mod confirm;
 mod direct;
 mod doctor;
 mod enter;
@@ -15,6 +16,7 @@ mod naming;
 mod pick;
 mod settings;
 mod tmux;
+mod update;
 mod version;
 
 use std::process::ExitCode;
@@ -48,6 +50,8 @@ fn main() -> ExitCode {
             &config,
         )),
         Some(Cmd::Config { path }) => Some(settings::show(cli.socket.as_deref(), &config, *path)),
+        // Needs no tmux and no config.
+        Some(Cmd::Update { check, yes }) => Some(update::run(*check, *yes).map(|()| true)),
         _ => None,
     };
     if let Some(result) = checked {
@@ -96,7 +100,9 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             commands::rename(&tmux, &name, &new_name, host.as_deref())
         }
         // Printed before tmux is needed (`main`).
-        (Some(Cmd::Version | Cmd::Doctor | Cmd::Config { .. }), None) => Ok(()),
+        (Some(Cmd::Version | Cmd::Doctor | Cmd::Config { .. } | Cmd::Update { .. }), None) => {
+            Ok(())
+        }
         (Some(Cmd::New { name, dir }), None) => {
             let cwd = match dir {
                 Some(dir) => commands::folder(&dir)?,

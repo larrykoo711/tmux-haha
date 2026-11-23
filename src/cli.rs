@@ -67,6 +67,15 @@ pub enum Cmd {
     },
     /// Print the version.
     Version,
+    /// Look for a new version and install it the way ta was installed.
+    Update {
+        /// Only say whether there is one; change nothing.
+        #[arg(long)]
+        check: bool,
+        /// Don't ask.
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Check that ta can do its job here: tmux, the server, the config, zoxide.
     Doctor,
     /// Show the config file and where each setting's value comes from.

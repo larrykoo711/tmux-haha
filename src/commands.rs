@@ -1,6 +1,5 @@
 //! Session commands for scripts: the picker's actions, same rules.
 
-use std::io::{BufRead, IsTerminal, Write};
 use std::path::Path;
 
 use anyhow::{bail, Result};
@@ -81,28 +80,16 @@ pub fn close(
     Ok(())
 }
 
-/// Ask on the terminal; off a terminal there is nobody to ask, so no.
 fn confirm(name: &str) -> Result<bool> {
-    if !std::io::stdin().is_terminal() {
-        bail!(tr!(
-            format!("closing {name} ends everything running in it; add --yes to close it without asking"),
-            format!("关闭 {name} 会结束里面运行的一切；不问就关请加 --yes")
-        ));
-    }
-    eprint!(
-        "{}",
-        tr!(
-            format!("Close {name}? It ends everything running in it. [y/N] "),
-            format!("关闭 {name}？会结束里面运行的一切。[y/N] ")
-        )
-    );
-    std::io::stderr().flush()?;
-    let mut line = String::new();
-    std::io::stdin().lock().read_line(&mut line)?;
-    Ok(matches!(
-        line.trim().to_lowercase().as_str(),
-        "y" | "yes" | "是"
-    ))
+    crate::confirm::ask(
+        false,
+        &tr!(
+            format!("Close {name}? It ends everything running in it."),
+            format!("关闭 {name}？会结束里面运行的一切。")
+        ),
+        tr!("add --yes to close it without asking", "不问就关请加 --yes"),
+        false,
+    )
 }
 
 /// `ta rename <name> <new>`: rename it, the new name made one tmux takes.
