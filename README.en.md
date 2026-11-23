@@ -33,7 +33,15 @@ roots = ["~/code"]     # the folder tab lists the folders inside these
 
 ## Living with other tools
 
-`ta` only does what you ask: it doesn't change global tmux options, bind keys or end the tmux server. It lists every session on the server, other tools' included, and closes one only after you confirm, so check which one it is first.
+`ta` only does what you ask: it doesn't change global tmux options, bind keys or end the tmux server, and it always asks before closing a session.
+
+Another tool can tell `ta` to keep its hands off a session by setting one tmux session option:
+
+```sh
+tmux set-option -t <session> @managed-by <tool>
+```
+
+`ta` still lists such a session, with the tool's name, but only goes to it: no renaming, no closing. [cc-moss](https://github.com/larrykoo711/cc-moss) sets `@managed-by cc-moss` on its Claude Code sessions.
 
 ## Install
 

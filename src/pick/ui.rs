@@ -380,7 +380,13 @@ fn list_row(
     selected: bool,
 ) -> Line<'static> {
     let age = short_ago(view.now_ms - s.activity_ms);
-    let room = width.saturating_sub(5 + age.width() + 2);
+    // Who manages it, after the name: `claude-work · cc-moss`.
+    let tool = s
+        .managed_by
+        .as_deref()
+        .map(|t| format!("  {}", fit(t, 12)))
+        .unwrap_or_default();
+    let room = width.saturating_sub(5 + age.width() + 2 + tool.width());
     let mut spans = vec![Span::raw("  "), dot(s, app.is_here(s)), Span::raw(" ")];
     let name_style = if selected {
         Style::new().add_modifier(Modifier::BOLD)
@@ -388,6 +394,9 @@ fn list_row(
         Style::new()
     };
     spans.extend(highlighted(&fit(&s.name, room), &app.query, name_style));
+    if !tool.is_empty() {
+        spans.push(Span::styled(tool, Style::new().fg(FAINT)));
+    }
     let used: usize = spans.iter().map(|s| s.content.width()).sum();
     spans.push(Span::raw(
         " ".repeat(width.saturating_sub(used + age.width() + 1)),
@@ -600,6 +609,12 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
                     grey(),
                 ),
             ]));
+            if let Some(tool) = &s.managed_by {
+                lines.push(Line::styled(
+                    super::app::managed_hint(tool),
+                    Style::new().fg(AMBER),
+                ));
+            }
             lines.push(Line::raw(""));
             lines.push(label(tr!("Folder", "目录")));
             lines.push(Line::raw(tilde(&s.path, view.home)));
@@ -950,6 +965,7 @@ mod tests {
 
     fn session(id: &str, name: &str, path: &str, at: i64, attached: bool) -> SessionInfo {
         SessionInfo {
+            managed_by: None,
             id: id.into(),
             name: name.into(),
             windows: 2,
@@ -1151,6 +1167,34 @@ mod tests {
         let text = render(&app, 100, 20);
         assert!(text.contains("No windows yet."), "{text}");
         assert!(text.contains("Find a window"), "{text}");
+    }
+
+    #[test]
+    fn managed_rows_fit_every_width() {
+        crate::i18n::set_for_test(Lang::Zh);
+        let mut long = session(
+            "$7",
+            "a-very-long-claude-session-name-that-keeps-going",
+            "/home/u/acme",
+            500_000,
+            false,
+        );
+        long.managed_by = Some("cc-moss".into());
+        let mut app = App::new(
+            vec![long, session("$1", "api", "/home/u/acme", 1, false)],
+            None,
+        );
+        for w in [120, 90, 80, 60] {
+            let text = render(&app, w, 24);
+            for line in text.lines() {
+                assert!(line.width() <= w as usize, "{w}: {line:?}");
+            }
+            assert!(text.contains("cc-moss"), "{w}\n{text}");
+        }
+        crate::i18n::set_for_test(Lang::En);
+        app.set_sessions(app.groups()[0].sessions.clone());
+        let text = render(&app, 120, 24);
+        assert!(text.contains("cc-moss manages this session"), "{text}");
     }
 
     #[test]

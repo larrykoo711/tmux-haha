@@ -33,7 +33,15 @@ roots = ["~/code"]     # 目录页从这些文件夹里列出子文件夹
 
 ## 和别的工具共处
 
-`ta` 只做你让它做的事：不改全局 tmux 设置、不绑按键、不结束 tmux server。它列出同一个 tmux server 上的全部会话，包括别的工具建的；只有在你确认之后才会关掉其中一个，所以关之前看清是哪个会话。
+`ta` 只做你让它做的事：不改全局 tmux 设置、不绑按键、不结束 tmux server。关闭会话前一定先问你。
+
+别的工具可以在自己管理的会话上设一个 tmux 会话选项，告诉 `ta` 别动它：
+
+```sh
+tmux set-option -t <会话> @managed-by <工具名>
+```
+
+带这个选项的会话，`ta` 照常列出并标出工具名，但只能进入，不能改名、不能关闭。[cc-moss](https://github.com/larrykoo711/cc-moss) 会给它的 Claude Code 会话设上 `@managed-by cc-moss`。
 
 ## 安装
 

@@ -142,6 +142,9 @@ pub struct SessionInfo {
     pub windows: u32,
     pub activity_ms: i64,
     pub attached: bool,
+    /// The tool that manages it (`@managed-by`), when one says so: ta only
+    /// goes to such a session, never renames or closes it.
+    pub managed_by: Option<String>,
     /// The session's start directory.
     pub path: String,
 }
@@ -167,7 +170,8 @@ pub struct WindowInfo {
 /// control characters such as tabs in format output with `_`.
 const SEP: &str = "|:|";
 
-const SESSION_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{session_windows}|:|#{session_activity}|:|#{session_attached}|:|#{session_path}";
+/// `#{@managed-by}`: the option a tool sets on the sessions it manages (see the README).
+const SESSION_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{session_windows}|:|#{session_activity}|:|#{session_attached}|:|#{@managed-by}|:|#{session_path}";
 
 const WINDOW_FORMAT: &str = "#{session_id}|:|#{session_name}|:|#{window_id}|:|#{window_index}|:|#{window_name}|:|#{window_active}|:|#{window_panes}|:|#{window_activity}|:|#{pane_current_path}";
 
@@ -187,13 +191,14 @@ fn parse_window(line: &str) -> Option<WindowInfo> {
 }
 
 fn parse_session(line: &str) -> Option<SessionInfo> {
-    let mut f = line.splitn(6, SEP);
+    let mut f = line.splitn(7, SEP);
     Some(SessionInfo {
         id: f.next()?.to_string(),
         name: f.next()?.to_string(),
         windows: f.next()?.parse().ok()?,
         activity_ms: f.next()?.parse::<i64>().ok()? * 1000,
         attached: f.next()? != "0",
+        managed_by: Some(f.next()?.trim().to_string()).filter(|m| !m.is_empty()),
         path: f.next().unwrap_or_default().to_string(),
     })
 }
@@ -420,13 +425,17 @@ mod tests {
 
     #[test]
     fn parses_a_session_row() {
-        let row = parse_session("$3|:|api|:|2|:|1700000000|:|1|:|/w/a|:|b").unwrap();
+        let row = parse_session("$3|:|api|:|2|:|1700000000|:|1|:||:|/w/a|:|b").unwrap();
         assert_eq!(row.id, "$3");
         assert_eq!(row.name, "api");
         assert_eq!(row.windows, 2);
         assert_eq!(row.activity_ms, 1_700_000_000_000);
         assert!(row.attached);
         assert_eq!(row.path, "/w/a|:|b");
+        assert_eq!(row.managed_by, None);
+        let row = parse_session("$4|:|claude|:|1|:|1700000000|:|0|:|cc-moss|:|/w").unwrap();
+        assert_eq!(row.managed_by.as_deref(), Some("cc-moss"));
+        assert_eq!(row.path, "/w");
         assert!(parse_session("garbage").is_none());
     }
 

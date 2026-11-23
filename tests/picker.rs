@@ -139,3 +139,30 @@ fn picker_folder_with_a_session_goes_there() {
     wait_for(|| (!w.session_names().contains(&"driver".to_string())).then_some(()));
     assert_eq!(w.session_names(), ["already"]);
 }
+
+#[test]
+fn picker_leaves_a_managed_session_alone() {
+    let w = World::new();
+    let work = w.dir("work");
+    w.ta(&["-d", "claude-work"], &work);
+    w.ta(&["-d", "plain"], &work);
+    w.tmux(&["set-option", "-t", "claude-work", "@managed-by", "cc-moss"]);
+    w.start_picker(&work);
+    w.type_text("claude-work");
+    w.keys(&["Right"]);
+    let screen = w.wait_for_screen(|s| s.contains("cc-moss manages this session"));
+    assert!(
+        !screen.contains("Rename") && !screen.contains("Close"),
+        "{screen}"
+    );
+    // The only choice is Open; Down then Enter still opens, never closes.
+    w.keys(&["Down", "Escape", "Escape"]);
+    w.wait_for_screen(|s| s.contains("Find a session"));
+    // A plain session next to it can still be closed.
+    w.type_text("plain");
+    w.keys(&["Right", "Down", "Down", "Enter"]);
+    w.wait_for_screen(|s| s.contains("Close plain?"));
+    w.keys(&["Left", "Enter"]);
+    wait_for(|| (!w.session_names().contains(&"plain".to_string())).then_some(()));
+    assert_eq!(w.session_names(), ["claude-work", "driver"]);
+}

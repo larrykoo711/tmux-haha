@@ -32,6 +32,7 @@ mod tests {
 
     fn session(id: &str, name: &str) -> SessionInfo {
         SessionInfo {
+            managed_by: None,
             id: id.into(),
             name: name.into(),
             windows: 1,

@@ -177,6 +177,14 @@ pub fn here_hint() -> String {
     .to_string()
 }
 
+/// Why a session another tool manages has nothing but "Open".
+pub fn managed_hint(tool: &str) -> String {
+    tr!(
+        format!("{tool} manages this session; in ta you can only go to it."),
+        format!("这个会话由 {tool} 管理，在 ta 里只能进入。")
+    )
+}
+
 impl App {
     pub fn new(sessions: Vec<SessionInfo>, here: Option<String>) -> Self {
         let mut app = App {
@@ -561,11 +569,18 @@ impl App {
     }
 
     fn choices(&self, s: &SessionInfo) -> Vec<Choice> {
-        if self.is_here(s) {
+        if s.managed_by.is_some() {
+            vec![Choice::Open]
+        } else if self.is_here(s) {
             vec![Choice::Open, Choice::Rename]
         } else {
             vec![Choice::Open, Choice::Rename, Choice::Close]
         }
+    }
+
+    /// Why `s` can't be changed from here, if it can't: another tool manages it.
+    fn hands_off(s: &SessionInfo) -> Option<String> {
+        s.managed_by.as_deref().map(managed_hint)
     }
 
     fn browse(&mut self, key: KeyEvent, ctrl: bool) -> Action {
@@ -603,7 +618,9 @@ impl App {
             }
             KeyCode::Right => {
                 if let Some(Item::Session(s)) = self.selected() {
-                    if self.is_here(&s) {
+                    if let Some(why) = Self::hands_off(&s) {
+                        self.message = Some(why);
+                    } else if self.is_here(&s) {
                         self.message = Some(here_hint());
                     }
                     self.mode = Mode::Menu {
@@ -669,6 +686,10 @@ impl App {
         let close = |app: &mut App| {
             app.mode = Mode::Browse;
             match app.selected() {
+                Some(Item::Session(s)) if Self::hands_off(&s).is_some() => {
+                    app.message = Self::hands_off(&s);
+                    Action::None
+                }
                 Some(Item::Session(s)) if app.is_here(&s) => {
                     app.message = Some(here_hint());
                     Action::None
@@ -702,6 +723,10 @@ impl App {
                 self.mode = Mode::Browse;
                 let name = text.trim().to_string();
                 match self.selected() {
+                    Some(Item::Session(s)) if Self::hands_off(&s).is_some() => {
+                        self.message = Self::hands_off(&s);
+                        Action::None
+                    }
                     Some(Item::Session(s)) if !name.is_empty() && name != s.name => {
                         Action::Rename { id: s.id, name }
                     }
@@ -739,6 +764,7 @@ mod tests {
 
     pub fn session(id: &str, name: &str, path: &str, at: i64) -> SessionInfo {
         SessionInfo {
+            managed_by: None,
             id: id.into(),
             name: name.into(),
             windows: 1,
@@ -860,6 +886,53 @@ mod tests {
         app.handle(key(KeyCode::Left));
         assert_eq!(app.handle(key(KeyCode::Enter)), Action::Close("$3".into()));
         assert_eq!(app.mode, Mode::Browse);
+    }
+
+    fn managed_sample() -> App {
+        let mut claude = session("$9", "claude-work", "/w/acme", 99);
+        claude.managed_by = Some("cc-moss".into());
+        App::new(vec![claude, session("$1", "api", "/w/acme", 5)], None)
+    }
+
+    #[test]
+    fn managed_sessions_only_open() {
+        let mut app = managed_sample();
+        select(&mut app, "claude-work");
+        app.handle(key(KeyCode::Right));
+        assert_eq!(
+            app.mode,
+            Mode::Menu {
+                choices: vec![Choice::Open],
+                cursor: 0
+            }
+        );
+        assert_eq!(app.message, Some(managed_hint("cc-moss")));
+        assert_eq!(app.handle(key(KeyCode::Enter)), Action::Attach("$9".into()));
+        // A session without the option keeps every choice.
+        let mut app = managed_sample();
+        select(&mut app, "api");
+        app.handle(key(KeyCode::Right));
+        assert!(matches!(&app.mode, Mode::Menu { choices, .. } if choices.len() == 3));
+    }
+
+    #[test]
+    fn confirm_refuses_a_managed_session() {
+        let mut app = managed_sample();
+        select(&mut app, "claude-work");
+        app.mode = Mode::Confirm { yes: true };
+        assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
+        assert_eq!(app.message, Some(managed_hint("cc-moss")));
+    }
+
+    #[test]
+    fn rename_refuses_a_managed_session() {
+        let mut app = managed_sample();
+        select(&mut app, "claude-work");
+        app.mode = Mode::Rename {
+            text: "other".into(),
+        };
+        assert_eq!(app.handle(key(KeyCode::Enter)), Action::None);
+        assert_eq!(app.message, Some(managed_hint("cc-moss")));
     }
 
     #[test]
