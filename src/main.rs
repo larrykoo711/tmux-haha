@@ -2,56 +2,36 @@
 
 #[macro_use]
 mod i18n;
+mod cli;
 mod command;
 mod config;
 mod direct;
 mod enter;
 mod folders;
+mod help_zh;
 mod naming;
 mod pick;
 mod tmux;
+mod version;
 
 use std::process::ExitCode;
 
 use anyhow::{bail, Result};
-use clap::{Parser, Subcommand};
 use unicode_width::UnicodeWidthStr;
 
+use cli::{Cli, Cmd};
 use direct::Target;
 use tmux::{Access, DuplicateName, NotInstalled, ProcessRunner, SessionInfo, Socket, Tmux};
 
-/// Find, start and switch tmux sessions.
-#[derive(Parser)]
-#[command(name = "ta", version)]
-struct Cli {
-    /// The tmux server: a socket name (`tmux -L`) or path (`tmux -S`). Default: tmux's own.
-    #[arg(long, env = "TA_TMUX_SOCKET", global = true, value_name = "NAME|PATH")]
-    socket: Option<String>,
-
-    /// Start or find the session, print its name, but don't go there.
-    #[arg(short, long, global = true)]
-    detached: bool,
-
-    #[command(subcommand)]
-    command: Option<Cmd>,
-
-    /// Go to the session with this name, starting it in this folder if there is none.
-    /// (`ta -- ls` for a session named like a command.)
-    name: Option<String>,
-}
-
-#[derive(Subcommand)]
-enum Cmd {
-    /// Start a new session in this folder, named after it unless you give a name.
-    New { name: Option<String> },
-    /// List sessions.
-    Ls,
-}
-
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    // The config first: its `language` decides the help's language too.
     let config = config::load();
     i18n::set_config_language(config.as_ref().ok().and_then(|c| c.language.clone()));
+    let cli = cli::parse();
+    if cli.version || matches!(cli.command, Some(Cmd::Version)) {
+        version::print();
+        return ExitCode::SUCCESS;
+    }
     match config.and_then(|c| run(cli, &c)) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
@@ -82,6 +62,8 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             format!("会话名和命令只能给一个（会话名和命令同名时：ta -- {name}）")
         )),
         (Some(Cmd::Ls), None) => ls(&tmux),
+        // Printed before tmux is needed (`main`).
+        (Some(Cmd::Version), None) => Ok(()),
         (Some(Cmd::New { name }), None) => {
             let cwd = cwd()?;
             let desired = naming::new_session_name(name.as_deref(), &cwd, host.as_deref());
