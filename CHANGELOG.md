@@ -6,6 +6,21 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- **Help in English or Chinese.** `ta --help`, `ta help <command>` and usage mistakes follow your language
+  (`TA_LANG`, the config's `language`, or the system's).
+- **`ta version`** (and `-V`): the name, version, one line and the address in a terminal; `ta <version>` when piped.
+- **`ta close <name>`** (asks first; `--yes` doesn't) and **`ta rename <name> <new>`**, by the picker's rules: a session
+  another tool manages, or the one you are in, is refused. **`ta ls --json`** and **`ta new --dir <folder>`** for scripts.
+- **`ta doctor`** checks tmux, the server, the config, zoxide, the folder roots and completions; **`ta config`** shows
+  each setting's value and where it comes from. Both work with a broken config.
+- **`ta update`** installs a new version the way you installed ta: `brew upgrade`, `cargo install`, or a download it
+  checks against its published checksum before replacing itself. `--check` only looks. Online only when you run it.
+- **`ta install`** sets up shell completions (zsh, bash, fish) and, if you agree, a tmux key `prefix + T` that opens
+  `ta` in a popup; every change is asked for first, and `--uninstall` takes it all out. **`ta completions <shell>`**
+  prints the script.
+
 ## [0.1.0] - 2026-11-23
 
 The first release: one small command to find, start and switch tmux sessions.

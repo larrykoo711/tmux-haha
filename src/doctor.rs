@@ -43,6 +43,20 @@ pub fn run(tmux: &Tmux<ProcessRunner>, config: &Result<Config>) -> Result<bool> 
     checks.push(config_check(config, &home));
     let zoxide = zoxide_version();
     checks.extend(folder_checks(config, zoxide.as_deref(), &home));
+    if let Some(shell) = crate::install::detect_shell() {
+        checks.push(if crate::install::completions_installed(shell) {
+            check(Level::Ok, tr!("completions", "补全"), shell.to_string())
+        } else {
+            check(
+                Level::Note,
+                tr!("completions", "补全"),
+                tr!(
+                    format!("not set up for {shell}: ta install"),
+                    format!("{shell} 还没装：ta install")
+                ),
+            )
+        });
+    }
     if tmux_ok && cfg!(target_os = "macos") {
         if let Ok(cwd) = std::env::current_dir() {
             let cwd = cwd.to_string_lossy().into_owned();

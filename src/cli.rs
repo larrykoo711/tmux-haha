@@ -76,6 +76,27 @@ pub enum Cmd {
         #[arg(short, long)]
         yes: bool,
     },
+    /// Set up shell completions and, if you want, a tmux key that opens ta (asks first).
+    Install {
+        /// Don't ask.
+        #[arg(short, long)]
+        yes: bool,
+        /// Take out everything ta install added.
+        #[arg(long)]
+        uninstall: bool,
+        /// The shell to set up (default: from $SHELL).
+        #[arg(long, value_enum)]
+        shell: Option<ShellName>,
+        /// Leave the tmux config alone.
+        #[arg(long)]
+        no_tmux_key: bool,
+    },
+    /// Print the completion script for a shell.
+    Completions {
+        /// The shell.
+        #[arg(value_enum)]
+        shell: ShellName,
+    },
     /// Check that ta can do its job here: tmux, the server, the config, zoxide.
     Doctor,
     /// Show the config file and where each setting's value comes from.
@@ -84,6 +105,34 @@ pub enum Cmd {
         #[arg(long)]
         path: bool,
     },
+}
+
+/// A shell ta can complete in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum ShellName {
+    Zsh,
+    Bash,
+    Fish,
+}
+
+impl ShellName {
+    pub fn generator(self) -> clap_complete::Shell {
+        match self {
+            ShellName::Zsh => clap_complete::Shell::Zsh,
+            ShellName::Bash => clap_complete::Shell::Bash,
+            ShellName::Fish => clap_complete::Shell::Fish,
+        }
+    }
+}
+
+impl std::fmt::Display for ShellName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            ShellName::Zsh => "zsh",
+            ShellName::Bash => "bash",
+            ShellName::Fish => "fish",
+        })
+    }
 }
 
 /// The parsed command line. Help, version flags and usage mistakes are

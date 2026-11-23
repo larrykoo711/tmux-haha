@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod i18n;
+mod block;
 mod cli;
 mod command;
 mod commands;
@@ -12,6 +13,7 @@ mod doctor;
 mod enter;
 mod folders;
 mod help_zh;
+mod install;
 mod naming;
 mod pick;
 mod settings;
@@ -50,6 +52,10 @@ fn main() -> ExitCode {
             &config,
         )),
         Some(Cmd::Config { path }) => Some(settings::show(cli.socket.as_deref(), &config, *path)),
+        Some(Cmd::Completions { shell }) => {
+            print!("{}", install::completions(*shell));
+            Some(Ok(true))
+        }
         // Needs no tmux and no config.
         Some(Cmd::Update { check, yes }) => Some(update::run(*check, *yes).map(|()| true)),
         _ => None,
@@ -100,9 +106,33 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
             commands::rename(&tmux, &name, &new_name, host.as_deref())
         }
         // Printed before tmux is needed (`main`).
-        (Some(Cmd::Version | Cmd::Doctor | Cmd::Config { .. } | Cmd::Update { .. }), None) => {
-            Ok(())
-        }
+        (
+            Some(
+                Cmd::Version
+                | Cmd::Doctor
+                | Cmd::Config { .. }
+                | Cmd::Update { .. }
+                | Cmd::Completions { .. },
+            ),
+            None,
+        ) => Ok(()),
+        (
+            Some(Cmd::Install {
+                yes,
+                uninstall,
+                shell,
+                no_tmux_key,
+            }),
+            None,
+        ) => install::run(
+            &tmux,
+            install::Options {
+                yes,
+                uninstall,
+                shell,
+                no_tmux_key,
+            },
+        ),
         (Some(Cmd::New { name, dir }), None) => {
             let cwd = match dir {
                 Some(dir) => commands::folder(&dir)?,
