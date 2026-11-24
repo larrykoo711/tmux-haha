@@ -6,6 +6,28 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-24
+
+### Added
+
+- **Foreground app badges with preset colour styles.** Each row in the picker shows what is running in the session's
+  active pane, with distinct preset colours for popular AI coding agents (`claude`, `agy`, `codex`, `gemini`,
+  `opencode`, `aider`, `copilot`, `cursor`, `kiro`, `goose`, `amp`) and developer tools (`nvim`/`vim`/`hx`, `ssh`,
+  `docker`/`k9s`/`kubectl`, `lazygit`/`git`/`jj`, `python`/`uv`, `node`/`bun`/`pnpm`, `cargo`, `go`, database CLIs,
+  `btop`/`htop`/`yazi`), while interactive shells (`zsh`/`bash`/`fish`) stay quiet in the background. Search also
+  matches app names.
+- **Local host prefix stripped in the picker.** Session names starting with this machine's `<host>_` prefix display
+  without it in the list, window headers and card title, while keeping full session identity by `$id`.
+- **Busy and idle status from pane titles.** A braille spinner prefix shows as an animated orange spinner; `✳` shows
+  as amber idle.
+- **Pane title and live screen preview in the detail card.** Selecting a session or window shows its cleaned pane title
+  and the last ~8 lines of its active pane via `tmux capture-pane`, fetched only for the selected item so large lists
+  stay fast.
+- **Clear separation between managed and own sessions.** Sessions managed by another tool (`@managed-by`) use `◆` and
+  name the tool in the card; your own sessions use `●` (attached) and `○` (detached), with the current session marked
+  in red.
+- **`ta ls --json`** now includes each session's `command` and `title`.
+
 ## [0.2.1] - 2026-11-23
 
 ### Security
@@ -71,7 +93,8 @@ The first release: one small command to find, start and switch tmux sessions.
   (English or Chinese) and the folder roots. A broken file stops `ta` with the file and the mistake.
 - Prebuilt binaries for macOS (Apple silicon, Intel) and Linux (x86_64, arm64, static musl), plus a Homebrew formula.
 
-[Unreleased]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/larrykoo711/tmux-haha/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/larrykoo711/tmux-haha/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/larrykoo711/tmux-haha/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/larrykoo711/tmux-haha/releases/tag/v0.1.0
