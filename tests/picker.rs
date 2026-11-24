@@ -180,3 +180,44 @@ fn the_cursor_stays_on_new_through_refreshes() {
     let screen = w.screen();
     assert!(screen.contains("▌ + New session here"), "{screen}");
 }
+
+#[test]
+fn picker_strips_host_prefix_shows_managed_diamond_and_live_preview() {
+    let w = World::new();
+    let work = w.dir("work");
+    // Session with host prefix whose pane prints a recognisable line.
+    w.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "box_demo",
+        "-c",
+        work.to_str().unwrap(),
+        "sh",
+        "-c",
+        "printf 'live-preview-marker-42\\n'; sleep 60",
+    ]);
+    // Second session managed by another tool, also with host prefix.
+    w.tmux(&[
+        "new-session",
+        "-d",
+        "-s",
+        "box_managed",
+        "-c",
+        work.to_str().unwrap(),
+        "sleep",
+        "60",
+    ]);
+    w.tmux(&["set-option", "-t", "box_managed", "@managed-by", "cc-moss"]);
+
+    w.start_picker_with_env(&work, &[("TA_HOST_PREFIX", "box")]);
+    let screen = w.wait_for_screen(|s| s.contains("demo") && s.contains("managed"));
+    assert!(!screen.contains("box_demo"), "{screen}");
+    assert!(!screen.contains("box_managed"), "{screen}");
+    assert!(screen.contains("◆"), "{screen}");
+
+    // Filter to `demo` so it is selected and its live preview loads in the card.
+    w.type_text("demo");
+    let screen = w.wait_for_screen(|s| s.contains("live-preview-marker-42"));
+    assert!(screen.contains("live-preview-marker-42"), "{screen}");
+}

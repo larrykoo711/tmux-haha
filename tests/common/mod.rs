@@ -71,38 +71,43 @@ impl World {
     /// Run the picker in a 120×30 session called `driver` on the private
     /// server, as a person would in a terminal; wait until it has drawn.
     pub fn start_picker(&self, cwd: &Path) {
+        self.start_picker_with_env(cwd, &[]);
+    }
+
+    pub fn start_picker_with_env(&self, cwd: &Path, extra_env: &[(&str, &str)]) {
         let ta = env!("CARGO_BIN_EXE_ta");
         let home = self.home();
-        let status = Command::new("tmux")
-            .args([
-                "-L",
-                &self.socket,
-                "new-session",
-                "-d",
-                "-s",
-                "driver",
-                "-x",
-                "120",
-                "-y",
-                "30",
-                "-c",
-            ])
-            .arg(cwd)
-            .arg("env")
-            .args([
-                "-u",
-                "XDG_CONFIG_HOME",
-                "-u",
-                "_ZO_DATA_DIR",
-                "-u",
-                "XDG_DATA_HOME",
-            ])
-            .arg(format!("TA_TMUX_SOCKET={}", self.socket))
-            .arg("TA_LANG=en")
-            .arg(format!("HOME={}", home.display()))
-            .arg(ta)
-            .status()
-            .unwrap();
+        let mut cmd = Command::new("tmux");
+        cmd.args([
+            "-L",
+            &self.socket,
+            "new-session",
+            "-d",
+            "-s",
+            "driver",
+            "-x",
+            "120",
+            "-y",
+            "30",
+            "-c",
+        ])
+        .arg(cwd)
+        .arg("env")
+        .args([
+            "-u",
+            "XDG_CONFIG_HOME",
+            "-u",
+            "_ZO_DATA_DIR",
+            "-u",
+            "XDG_DATA_HOME",
+        ])
+        .arg(format!("TA_TMUX_SOCKET={}", self.socket))
+        .arg("TA_LANG=en")
+        .arg(format!("HOME={}", home.display()));
+        for (k, v) in extra_env {
+            cmd.arg(format!("{k}={v}"));
+        }
+        let status = cmd.arg(ta).status().unwrap();
         assert!(status.success());
         self.wait_for_screen(|s| s.contains("Find a session"));
     }

@@ -26,6 +26,8 @@ use app::{Action, App};
 const TICK: Duration = Duration::from_millis(200);
 /// Pick up new, renamed and ended sessions without asking.
 const REFRESH: Duration = Duration::from_secs(2);
+/// Tail lines of the selected pane shown in the detail card.
+const PREVIEW_LINES: usize = 8;
 
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -38,6 +40,7 @@ pub fn run(
     tmux: &Tmux<ProcessRunner>,
     socket: &Socket,
     host: Option<&str>,
+    local_prefix: Option<&str>,
     roots: &[String],
 ) -> Result<()> {
     let here = tmux.current_session(
@@ -45,6 +48,7 @@ pub fn run(
         std::env::var("TMUX_PANE").ok().as_deref(),
     );
     let mut app = App::new(tmux.sessions(), here);
+    app.set_host_prefix(local_prefix.map(String::from));
     app.set_windows(tmux.windows());
     app.set_folders(crate::folders::candidates(crate::folders::zoxide(), roots));
     let home = std::env::var("HOME").ok();
@@ -54,6 +58,8 @@ pub fn run(
         home: home.as_deref(),
         cwd: &cwd,
         version: env!("CARGO_PKG_VERSION"),
+        preview: &[],
+        tick: 0,
     };
     let action = {
         let _screen = Screen::enter()?;
@@ -88,15 +94,37 @@ fn event_loop(
 ) -> Result<Action> {
     let mut last_refresh = Instant::now();
     let mut hits = ui::HitMap::default();
+    let mut preview_target: Option<String> = None;
+    let mut preview_lines: Vec<String> = Vec::new();
+    let mut tick: usize = 0;
     loop {
+        let want_target = app.selected_preview_target();
+        if want_target != preview_target {
+            preview_lines = want_target
+                .as_deref()
+                .map(|id| tmux.capture_preview(id, PREVIEW_LINES))
+                .unwrap_or_default();
+            preview_target = want_target;
+        }
         view.now_ms = now_ms();
-        terminal.draw(|f| hits = ui::draw(f, app, view))?;
+        view.tick = tick;
+        let frame_view = ui::View {
+            preview: &preview_lines,
+            ..*view
+        };
+        terminal.draw(|f| hits = ui::draw(f, app, &frame_view))?;
         if last_refresh.elapsed() >= REFRESH {
             app.set_sessions(tmux.sessions());
             app.set_windows(tmux.windows());
+            preview_target = app.selected_preview_target();
+            preview_lines = preview_target
+                .as_deref()
+                .map(|id| tmux.capture_preview(id, PREVIEW_LINES))
+                .unwrap_or_default();
             last_refresh = Instant::now();
         }
         if !event::poll(TICK)? {
+            tick = tick.wrapping_add(1);
             continue;
         }
         let action = match event::read()? {

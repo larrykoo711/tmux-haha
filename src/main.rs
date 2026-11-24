@@ -2,6 +2,7 @@
 
 #[macro_use]
 mod i18n;
+mod apps;
 mod block;
 mod cli;
 mod command;
@@ -167,7 +168,15 @@ fn run(cli: Cli, config: &config::Config) -> Result<()> {
         }
         (None, None) => {
             let home = std::env::var("HOME").unwrap_or_default();
-            pick::run(&tmux, &socket, host.as_deref(), &config.roots(&home))
+            let local_prefix = naming::host_prefix()
+                .map(|h| format!("{}_", naming::sanitize(&h).to_lowercase()));
+            pick::run(
+                &tmux,
+                &socket,
+                host.as_deref(),
+                local_prefix.as_deref(),
+                &config.roots(&home),
+            )
         }
     }
 }
@@ -267,6 +276,8 @@ mod tests {
             activity_ms: 0,
             attached,
             path: path.into(),
+            command: String::new(),
+            title: String::new(),
         };
         let out = table(
             &[s("api", "/h/me/w", true), s("接口", "/srv", false)],
@@ -286,6 +297,8 @@ mod tests {
             activity_ms: 0,
             attached: false,
             path: "/srv".into(),
+            command: String::new(),
+            title: String::new(),
         };
         assert_eq!(table(&[s], "/h"), "  work  1 win    /srv  (cc-moss)\n");
     }

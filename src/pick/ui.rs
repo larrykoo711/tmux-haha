@@ -16,6 +16,7 @@ use ratatui::Frame;
 use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, Item, Mode, Row, Tab};
+use crate::apps::{self, Activity};
 use crate::i18n::Lang;
 use crate::tmux::{SessionInfo, WindowInfo};
 
@@ -32,18 +33,27 @@ const ON_BAND: Color = Color::Rgb(236, 236, 236);
 const ACCENT: Color = Color::Rgb(120, 200, 120);
 /// Closing; the "you are here" mark.
 const RED: Color = Color::Rgb(232, 86, 86);
-/// Messages in the hint line.
+/// Busy spinner (orange, matching cc-moss).
+const ORANGE: Color = Color::Rgb(245, 138, 66);
+/// Messages in the hint line, idle `✳`, managed-by accent.
 const AMBER: Color = Color::Rgb(240, 186, 70);
+/// Detached session managed by another tool (`◆`).
+const DIM_AMBER: Color = Color::Rgb(176, 140, 74);
 /// Below this width the card goes under the list.
 pub const SPLIT_MIN_WIDTH: u16 = 90;
 
 /// Everything the view needs besides the app state.
+#[derive(Clone, Copy)]
 pub struct View<'a> {
     pub now_ms: i64,
     pub home: Option<&'a str>,
     /// Where a new session would start.
     pub cwd: &'a str,
     pub version: &'a str,
+    /// Last lines of the selected pane, captured only for the selected item.
+    pub preview: &'a [String],
+    /// Monotonic tick counter for animating the busy spinner.
+    pub tick: usize,
 }
 
 /// Which list row each screen line shows, for mouse clicks.
@@ -77,7 +87,7 @@ pub fn draw(frame: &mut Frame, app: &App, view: &View) -> HitMap {
     draw_search(frame, search, app);
     rule(frame, rule1);
     let hits = if area.width >= SPLIT_MIN_WIDTH {
-        let list_w = (area.width * 2 / 5).clamp(34, 48);
+        let list_w = (area.width * 45 / 100).clamp(36, 56);
         let [list, gap, card] = Layout::horizontal([
             Constraint::Length(list_w),
             Constraint::Length(3),
@@ -213,6 +223,7 @@ struct ListLine {
 fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
     let width = area.width as usize;
     let labels = group_labels(app, view);
+    let cols_spec = session_columns(app, width);
     let mut lines: Vec<ListLine> = Vec::new();
     let mut cursor_line = 0;
     for (i, row) in app.rows().iter().enumerate() {
@@ -250,7 +261,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
             Row::Session(..) => {
                 let s = app.session(*row).expect("session row");
                 lines.push(ListLine {
-                    line: list_row(s, app, view, width, i == app.cursor),
+                    line: list_row(s, app, view, width, i == app.cursor, cols_spec),
                     row: Some(i),
                 });
             }
@@ -261,7 +272,7 @@ fn draw_list(frame: &mut Frame, area: Rect, app: &App, view: &View) -> HitMap {
                         row: None,
                     });
                 }
-                let name = &app.window_groups()[*g].session_name;
+                let name = app.display_name(&app.window_groups()[*g].session_name);
                 lines.push(ListLine {
                     line: Line::styled(
                         format!(" {}", fit(name, width.saturating_sub(1))),
@@ -360,10 +371,54 @@ fn group_labels(app: &App, view: &View) -> Vec<String> {
         .collect()
 }
 
-/// Attached: a terminal shows it right now.
-fn dot(s: &SessionInfo, here: bool) -> Span<'static> {
-    if here {
-        Span::styled("◆", Style::new().fg(RED))
+/// Aligned right-column widths shared across all visible session rows.
+#[derive(Clone, Copy, Default)]
+struct SessionCols {
+    /// Width of the app badge column (`0` when no session reports a command).
+    app_w: usize,
+    /// Whether any visible session has a Busy/Idle title indicator (`⠙` / `✳`).
+    has_activity: bool,
+}
+
+fn session_columns(app: &App, list_width: usize) -> SessionCols {
+    if list_width < 28 {
+        return SessionCols::default();
+    }
+    let mut app_w = 0usize;
+    let mut has_activity = false;
+    for row in app.rows() {
+        if let Some(s) = app.session(*row) {
+            let badge = apps::detect(&s.command, &s.title);
+            if !badge.label.is_empty() {
+                app_w = app_w.max(badge.label.width().min(8));
+            }
+            if apps::activity(&s.title) != Activity::Plain {
+                has_activity = true;
+            }
+        }
+    }
+    SessionCols {
+        app_w,
+        has_activity,
+    }
+}
+
+/// Ownership / attachment dot on the left of each session row:
+/// - `◆` = managed by another tool (amber when attached, dim amber when detached, red if here)
+/// - `●` = your own session, attached (green, or red if you are here)
+/// - `○` = your own session, detached (faint grey)
+fn owner_dot(s: &SessionInfo, here: bool) -> Span<'static> {
+    if s.managed_by.is_some() {
+        let color = if here {
+            RED
+        } else if s.attached {
+            AMBER
+        } else {
+            DIM_AMBER
+        };
+        Span::styled("◆", Style::new().fg(color))
+    } else if here {
+        Span::styled("●", Style::new().fg(RED))
     } else if s.attached {
         Span::styled("●", Style::new().fg(ACCENT))
     } else {
@@ -371,37 +426,84 @@ fn dot(s: &SessionInfo, here: bool) -> Span<'static> {
     }
 }
 
-/// `● name ……… 3m`: one line per session.
+/// Live activity glyph from the pane title (`⠙` busy orange, `✳` idle amber).
+fn activity_span(activity: Activity, tick: usize) -> Span<'static> {
+    match activity {
+        Activity::Busy => Span::styled(
+            apps::spinner_frame(tick).to_string(),
+            Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+        ),
+        Activity::Idle => Span::styled("✳", Style::new().fg(AMBER)),
+        Activity::Plain => Span::raw(" "),
+    }
+}
+
+/// `◆ name    claude   ⠙  10m`: one line per session with aligned app badge,
+/// title-derived activity and age.
 fn list_row(
     s: &SessionInfo,
     app: &App,
     view: &View,
     width: usize,
     selected: bool,
+    cols_spec: SessionCols,
 ) -> Line<'static> {
     let age = short_ago(view.now_ms - s.activity_ms);
-    // Who manages it, after the name: `claude-work · cc-moss`.
-    let tool = s
-        .managed_by
-        .as_deref()
-        .map(|t| format!("  {}", fit(t, 12)))
-        .unwrap_or_default();
-    let room = width.saturating_sub(5 + age.width() + 2 + tool.width());
-    let mut spans = vec![Span::raw("  "), dot(s, app.is_here(s)), Span::raw(" ")];
+    let age_col_w = age.width().max(3);
+    let badge = apps::detect(&s.command, &s.title);
+    let act = apps::activity(&s.title);
+    let display = app.display_name(&s.name);
+
+    // Reserve right-hand columns: [  app_badge][  act][  age ]
+    let app_tail = if cols_spec.app_w > 0 {
+        2 + cols_spec.app_w
+    } else {
+        0
+    };
+    let act_tail = if cols_spec.has_activity { 2 } else { 0 };
+    let age_tail = 2 + age_col_w + 1;
+    let right_w = app_tail + act_tail + age_tail;
+    let name_room = width.saturating_sub(4 + right_w);
+
+    let mut spans = vec![
+        Span::raw("  "),
+        owner_dot(s, app.is_here(s)),
+        Span::raw(" "),
+    ];
     let name_style = if selected {
         Style::new().add_modifier(Modifier::BOLD)
     } else {
         Style::new()
     };
-    spans.extend(highlighted(&fit(&s.name, room), &app.query, name_style));
-    if !tool.is_empty() {
-        spans.push(Span::styled(tool, Style::new().fg(FAINT)));
-    }
-    let used: usize = spans.iter().map(|s| s.content.width()).sum();
-    spans.push(Span::raw(
-        " ".repeat(width.saturating_sub(used + age.width() + 1)),
+    spans.extend(highlighted(
+        &fit(display, name_room),
+        &app.query,
+        name_style,
     ));
-    spans.push(Span::styled(age, Style::new().fg(FAINT)));
+
+    let used: usize = spans.iter().map(|sp| sp.content.width()).sum();
+    let pad_before_right = width.saturating_sub(used + right_w);
+    spans.push(Span::raw(" ".repeat(pad_before_right)));
+
+    if cols_spec.app_w > 0 {
+        spans.push(Span::raw("  "));
+        let label = fit(&badge.label, cols_spec.app_w);
+        let pad = cols_spec.app_w.saturating_sub(label.width());
+        if !label.is_empty() {
+            spans.push(Span::styled(label, badge.style(selected)));
+        }
+        if pad > 0 {
+            spans.push(Span::raw(" ".repeat(pad)));
+        }
+    }
+    if cols_spec.has_activity {
+        spans.push(Span::raw(" "));
+        spans.push(activity_span(act, view.tick));
+    }
+    let age_pad = age_col_w.saturating_sub(age.width());
+    spans.push(Span::raw(" ".repeat(2 + age_pad)));
+    let age_color = if selected { GREY } else { FAINT };
+    spans.push(Span::styled(age, Style::new().fg(age_color)));
     Line::from(spans)
 }
 
@@ -579,17 +681,70 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
         }
         Item::Session(s) => {
             let here = app.is_here(s);
+            let display = app.display_name(&s.name);
+            let badge = apps::detect(&s.command, &s.title);
+            let act = apps::activity(&s.title);
+            let inner_w = area.width.saturating_sub(2) as usize;
+
             lines.push(Line::styled(
-                s.name.clone(),
+                display.to_string(),
                 Style::new().add_modifier(Modifier::BOLD),
             ));
-            let (state, color) = if here {
+
+            // Status line: [activity ·] [colored app ·] ownership/attachment
+            let mut status_spans: Vec<Span<'static>> = Vec::new();
+            match act {
+                Activity::Busy => {
+                    status_spans.push(activity_span(act, view.tick));
+                    status_spans.push(Span::styled(
+                        tr!(" Working", " 在忙"),
+                        Style::new().fg(ORANGE).add_modifier(Modifier::BOLD),
+                    ));
+                }
+                Activity::Idle => {
+                    status_spans.push(activity_span(act, view.tick));
+                    status_spans.push(Span::styled(tr!(" Idle", " 空闲"), Style::new().fg(AMBER)));
+                }
+                Activity::Plain => {
+                    status_spans.push(owner_dot(s, here));
+                }
+            }
+            if !badge.label.is_empty() {
+                if act != Activity::Plain {
+                    status_spans.push(Span::styled("  ·  ", Style::new().fg(FAINT)));
+                } else {
+                    status_spans.push(Span::raw(" "));
+                }
+                status_spans.push(Span::styled(badge.label.clone(), badge.style(false)));
+            }
+            let (conn_state, conn_color) = if here {
                 (tr!("You are here", "你在这里"), RED)
             } else if s.attached {
                 (tr!("Open in a terminal", "有终端接着"), ACCENT)
             } else {
                 (tr!("Not open anywhere", "没有终端接着"), GREY)
             };
+            if act == Activity::Plain && badge.label.is_empty() {
+                status_spans.push(Span::styled(
+                    format!(" {conn_state}"),
+                    Style::new().fg(conn_color),
+                ));
+            } else {
+                status_spans.push(Span::styled("  ·  ", Style::new().fg(FAINT)));
+                status_spans.push(Span::styled(
+                    conn_state.to_string(),
+                    Style::new().fg(conn_color),
+                ));
+            }
+            lines.push(Line::from(status_spans));
+
+            if let Some(tool) = &s.managed_by {
+                lines.push(Line::from(vec![
+                    Span::styled("◆ ", Style::new().fg(AMBER)),
+                    Span::styled(super::app::managed_hint(tool), Style::new().fg(AMBER)),
+                ]));
+            }
+
             let windows = tr!(
                 format!(
                     "{} window{}",
@@ -598,29 +753,44 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
                 ),
                 format!("{} 个窗口", s.windows)
             );
-            lines.push(Line::from(vec![
-                dot(s, here),
-                Span::styled(format!(" {state}"), Style::new().fg(color)),
-                Span::styled(
-                    format!(
-                        "  ·  {windows}  ·  {}",
-                        long_ago(view.now_ms - s.activity_ms)
-                    ),
-                    grey(),
+            lines.push(Line::styled(
+                format!(
+                    "{windows}  ·  {}  ·  {}",
+                    long_ago(view.now_ms - s.activity_ms),
+                    tilde(&s.path, view.home)
                 ),
-            ]));
-            if let Some(tool) = &s.managed_by {
-                lines.push(Line::styled(
-                    super::app::managed_hint(tool),
-                    Style::new().fg(AMBER),
-                ));
+                grey(),
+            ));
+
+            let title_text = apps::clean_title(&s.title);
+            if !title_text.is_empty() && title_text != display && title_text != s.name {
+                let prefix = tr!("Title: ", "标题：");
+                let room = inner_w.saturating_sub(prefix.width());
+                lines.push(Line::from(vec![
+                    Span::styled(prefix, Style::new().fg(FAINT)),
+                    Span::raw(fit(title_text, room)),
+                ]));
             }
-            lines.push(Line::raw(""));
-            lines.push(label(tr!("Folder", "目录")));
-            lines.push(Line::raw(tilde(&s.path, view.home)));
-            lines.push(Line::raw(""));
+
+            if !view.preview.is_empty() && matches!(app.mode, Mode::Browse) {
+                // Leave room for the divider + optional footer (2 lines).
+                let avail = (area.height as usize).saturating_sub(lines.len() + 3);
+                if avail >= 1 {
+                    lines.push(Line::styled(
+                        "─".repeat(inner_w.max(1)),
+                        Style::new().fg(FAINT),
+                    ));
+                    let take = view.preview.len().min(8).min(avail);
+                    let start = view.preview.len() - take;
+                    for raw in &view.preview[start..] {
+                        lines.push(Line::styled(fit(raw, inner_w), grey()));
+                    }
+                }
+            }
+
             // An open menu, question or rename box takes this line's place.
             if matches!(app.mode, Mode::Browse) {
+                lines.push(Line::raw(""));
                 lines.push(Line::from(vec![
                     key("↵"),
                     word(tr!(" Open", " 进入")),
@@ -632,6 +802,7 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
             s.name.clone()
         }
         Item::Window(w) => {
+            let inner_w = area.width.saturating_sub(2) as usize;
             lines.push(Line::styled(
                 format!("{}: {}", w.index, w.name),
                 Style::new().add_modifier(Modifier::BOLD),
@@ -643,7 +814,7 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
             lines.push(Line::styled(
                 format!(
                     "{}  ·  {panes}  ·  {}",
-                    w.session_name,
+                    app.display_name(&w.session_name),
                     long_ago(view.now_ms - w.activity_ms)
                 ),
                 grey(),
@@ -651,6 +822,20 @@ fn draw_card(frame: &mut Frame, area: Rect, app: &App, view: &View) {
             lines.push(Line::raw(""));
             lines.push(label(tr!("Folder", "目录")));
             lines.push(Line::raw(tilde(&w.path, view.home)));
+            if !view.preview.is_empty() {
+                let avail = (area.height as usize).saturating_sub(lines.len() + 3);
+                if avail >= 1 {
+                    lines.push(Line::styled(
+                        "─".repeat(inner_w.max(1)),
+                        Style::new().fg(FAINT),
+                    ));
+                    let take = view.preview.len().min(8).min(avail);
+                    let start = view.preview.len() - take;
+                    for raw in &view.preview[start..] {
+                        lines.push(Line::styled(fit(raw, inner_w), grey()));
+                    }
+                }
+            }
             lines.push(Line::raw(""));
             lines.push(Line::from(vec![key("↵"), word(tr!(" Go there", " 进入"))]));
             String::new()
@@ -974,6 +1159,8 @@ mod tests {
             activity_ms: at,
             attached,
             path: path.into(),
+            command: String::new(),
+            title: String::new(),
         }
     }
 
@@ -995,11 +1182,17 @@ mod tests {
     }
 
     fn render(app: &App, w: u16, h: u16) -> String {
+        render_with(app, w, h, &[], 0)
+    }
+
+    fn render_with(app: &App, w: u16, h: u16, preview: &[String], tick: usize) -> String {
         let view = View {
             now_ms: 600_000,
             home: Some("/home/u"),
             cwd: "/home/u/projects",
-            version: "0.1.0",
+            version: "0.3.0",
+            preview,
+            tick,
         };
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| {
@@ -1028,7 +1221,9 @@ mod tests {
             now_ms: 600_000,
             home: Some("/home/u"),
             cwd: "/home/u/projects",
-            version: "0.1.0",
+            version: "0.3.0",
+            preview: &[],
+            tick: 0,
         };
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         t.draw(|f| {
@@ -1271,8 +1466,83 @@ mod tests {
         crate::i18n::set_for_test(Lang::En);
         let mut app = sample();
         app.handle(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE));
+        let buf = buffer(&app, 120, 24);
         let text = render(&app, 120, 24);
-        assert!(text.contains("◆"), "{text}");
         assert!(text.contains("You are here"), "{text}");
+        // Own session uses ● (red when here), reserving ◆ for managed sessions.
+        let y = (0..24).find(|&y| buf[(0, y)].symbol() == "▌").unwrap();
+        assert_eq!(buf[(2, y)].symbol(), "●");
+        assert_eq!(buf[(2, y)].fg, RED);
+    }
+
+    #[test]
+    fn shows_app_badges_host_strip_activity_and_preview() {
+        crate::i18n::set_for_test(Lang::Zh);
+        let mut s_claude = session("$1", "box_em-model", "/home/u/work", 540_000, true);
+        s_claude.managed_by = Some("cc-moss".into());
+        s_claude.command = "2.1.330".into();
+        s_claude.title = "⠙ em-model-run".into();
+
+        let mut s_idle = session("$2", "box_audit", "/home/u/work", 480_000, false);
+        s_idle.managed_by = Some("cc-moss".into());
+        s_idle.command = "2.1.328".into();
+        s_idle.title = "✳ audit".into();
+
+        let mut s_agy = session("$3", "studio", "/home/u/work", 420_000, true);
+        s_agy.command = "antigravity".into();
+        s_agy.title = "agy --dangerously-skip-permissions".into();
+
+        let mut s_zsh = session("$4", "shell", "/home/u/work", 360_000, false);
+        s_zsh.command = "zsh".into();
+
+        let mut app = App::new(vec![s_claude, s_idle, s_agy, s_zsh], None);
+        app.set_host_prefix(Some("box_".into()));
+
+        let preview = vec![
+            "⏺ 跑完 21 条测试，全部通过".into(),
+            "❯ 下一步：把结果写进报告".into(),
+        ];
+        for w in [120, 90, 80, 60] {
+            let text = render_with(&app, w, 24, &preview, 1);
+            for line in text.lines() {
+                assert!(line.width() <= w as usize, "{w}: {line:?}");
+            }
+            // Host prefix stripped from display.
+            assert!(text.contains("em-model"), "{w}\n{text}");
+            assert!(!text.contains("box_em-model"), "{w}\n{text}");
+            // App badges & symbols rendered.
+            assert!(text.contains("claude"), "{w}\n{text}");
+            assert!(text.contains("agy"), "{w}\n{text}");
+            assert!(text.contains("zsh"), "{w}\n{text}");
+            assert!(text.contains("◆"), "{w}\n{text}");
+            assert!(text.contains("●"), "{w}\n{text}");
+            assert!(text.contains("○"), "{w}\n{text}");
+            assert!(text.contains("⠙"), "{w}\n{text}");
+            assert!(text.contains("✳"), "{w}\n{text}");
+        }
+        let text = render_with(&app, 120, 24, &preview, 1);
+        assert!(text.contains("在忙"), "{text}");
+        assert!(text.contains("标题：em-model-run"), "{text}");
+        assert!(text.contains("跑完 21 条测试"), "{text}");
+        assert!(text.contains("把结果写进报告"), "{text}");
+
+        // Distinct preset colours for claude vs agy in the rendered buffer.
+        let buf = buffer(&app, 120, 24);
+        let find_word_color = |word: &str| {
+            for y in 0..24 {
+                let row: String = (0..60).map(|x| buf[(x, y)].symbol()).collect();
+                if let Some(byte_idx) = row.find(word) {
+                    let col = row[..byte_idx].width() as u16;
+                    return Some(buf[(col, y)].fg);
+                }
+            }
+            None
+        };
+        let claude_fg = find_word_color("claude").expect("claude badge");
+        let agy_fg = find_word_color("agy").expect("agy badge");
+        let zsh_fg = find_word_color("zsh").expect("zsh badge");
+        assert_ne!(claude_fg, agy_fg);
+        assert_ne!(claude_fg, zsh_fg);
+        assert_ne!(agy_fg, zsh_fg);
     }
 }

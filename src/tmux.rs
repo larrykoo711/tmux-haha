@@ -147,6 +147,10 @@ pub struct SessionInfo {
     pub managed_by: Option<String>,
     /// The session's start directory.
     pub path: String,
+    /// Foreground program in the active pane (`pane_current_command`).
+    pub command: String,
+    /// Active pane's title (`pane_title`).
+    pub title: String,
 }
 
 /// One row of `tmux list-windows -a`.
@@ -176,6 +180,8 @@ const SEP: &str = "|:|";
 // and names and paths are asked for in their own calls, keyed by id.
 const SESSION_FORMAT: &str = "#{session_id}|:|#{session_windows}|:|#{session_activity}|:|#{session_attached}|:|#{@managed-by}|:|#{session_name}";
 const SESSION_PATHS: &str = "#{session_id}|:|#{session_path}";
+const SESSION_COMMANDS: &str = "#{session_id}|:|#{pane_current_command}";
+const SESSION_TITLES: &str = "#{session_id}|:|#{pane_title}";
 const WINDOW_FORMAT: &str = "#{session_id}|:|#{window_id}|:|#{window_index}|:|#{window_active}|:|#{window_panes}|:|#{window_activity}|:|#{window_name}";
 const WINDOW_PATHS: &str = "#{window_id}|:|#{pane_current_path}";
 
@@ -221,6 +227,8 @@ fn parse_session(line: &str) -> Option<SessionInfo> {
         managed_by: Some(f.next()?.trim().to_string()).filter(|m| !m.is_empty()),
         name: f.next()?.to_string(),
         path: String::new(),
+        command: String::new(),
+        title: String::new(),
     })
 }
 
@@ -407,14 +415,59 @@ impl<R: Runner> Tmux<R> {
             .run(&["list-sessions", "-F", SESSION_PATHS])
             .map(|o| by_id(&o))
             .unwrap_or_default();
+        let commands = self
+            .run(&["list-sessions", "-F", SESSION_COMMANDS])
+            .map(|o| by_id(&o))
+            .unwrap_or_default();
+        let titles = self
+            .run(&["list-sessions", "-F", SESSION_TITLES])
+            .map(|o| by_id(&o))
+            .unwrap_or_default();
         out.lines()
             .filter_map(parse_session)
             .map(|mut s| {
                 s.path = paths.get(&s.id).cloned().unwrap_or_default();
+                s.command = commands.get(&s.id).cloned().unwrap_or_default();
+                s.title = titles.get(&s.id).cloned().unwrap_or_default();
                 s
             })
             .collect()
     }
+
+    /// Last `max_lines` non-empty tail lines from the active pane of `target`
+    /// (`$N` session id or `@N` window id), plain text without control codes.
+    pub fn capture_preview(&self, target: &str, max_lines: usize) -> Vec<String> {
+        if max_lines == 0 {
+            return Vec::new();
+        }
+        let Ok(out) = self.run(&["capture-pane", "-p", "-t", target, "-S", "-50"]) else {
+            return Vec::new();
+        };
+        parse_preview(&out, max_lines)
+    }
+}
+
+/// Strip control characters, drop trailing blank lines, and keep the last
+/// `max_lines` lines for the detail card preview.
+fn parse_preview(raw: &str, max_lines: usize) -> Vec<String> {
+    let mut lines: Vec<String> = raw
+        .lines()
+        .map(|l| {
+            l.chars()
+                .filter(|&c| !c.is_control() || c == '\t')
+                .collect::<String>()
+                .replace('\t', "    ")
+                .trim_end()
+                .to_string()
+        })
+        .collect();
+    while lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    if lines.len() > max_lines {
+        lines.drain(..lines.len() - max_lines);
+    }
+    lines
 }
 
 #[cfg(test)]
@@ -544,5 +597,33 @@ mod tests {
     fn cwd_cannot_inject_formats_or_commands() {
         assert_eq!(escape_cwd("/w/#{pid}"), "/w/##{pid}");
         assert_eq!(escape_cwd("/w/x;"), "/w/x\\;");
+    }
+
+    #[test]
+    fn capture_preview_targets_id_and_keeps_tail_lines() {
+        let raw = "line1\nline2\nline3\x1b[31m\tred\n\n\n";
+        let fake = Fake::new(&[Ok(raw)]);
+        let tmux = Tmux::new(&fake);
+        let lines = tmux.capture_preview("$3", 2);
+        assert_eq!(lines, vec!["line2", "line3[31m    red"]);
+        assert_eq!(
+            fake.calls.borrow()[0],
+            ["capture-pane", "-p", "-t", "$3", "-S", "-50"]
+        );
+    }
+
+    #[test]
+    fn sessions_reads_command_and_title_in_separate_calls() {
+        let fake = Fake::new(&[
+            Ok("$1|:|1|:|1700000000|:|1|:|cc-moss|:|box_api\n"),
+            Ok("$1|:|/home/u/api\n"),
+            Ok("$1|:|2.1.330\n"),
+            Ok("$1|:|✳ api|:|with-sep\n"),
+        ]);
+        let tmux = Tmux::new(&fake);
+        let list = tmux.sessions();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].command, "2.1.330");
+        assert_eq!(list[0].title, "✳ api|:|with-sep");
     }
 }

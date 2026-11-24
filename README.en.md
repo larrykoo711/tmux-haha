@@ -23,6 +23,7 @@ More commands (`ta help` lists them all, `ta help <command>` explains one; help 
 | `ta install` | Shell completions and, if you want, a tmux key `prefix + T` that opens `ta` in a popup (asks for each; `--uninstall` takes it out) |
 | `ta version` | The version |
 
+- In the picker, each row shows the foreground app with preset colour styles for popular AI and terminal tools (`claude`, `agy`, `codex`, `gemini`, `nvim`, `ssh`, `docker`, `lazygit`, `zsh`, …), strips the local host prefix, infers busy/idle state from pane titles (orange spinner / amber `✳`), and shows the pane title plus a live ~8-line screen preview in the detail card. `◆` marks sessions managed by another tool; `●` / `○` mark your own (attached / detached).
 - In the picker, ↵ on a search with no match starts a session with that name. Closing a session asks first (Keep is the default), and the session you are in can't be closed from there.
 - The folders tab lists the folders zoxide knows and the ones inside `[folders] roots` from the config; ↵ goes to the session already in that folder, or starts one there.
 - Inside tmux it switches to the session; outside tmux it attaches.

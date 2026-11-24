@@ -61,6 +61,8 @@ mod tests {
             activity_ms: 0,
             attached: false,
             path: "/".into(),
+            command: String::new(),
+            title: String::new(),
         }
     }
 
