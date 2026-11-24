@@ -23,6 +23,8 @@ pub fn ls_json(tmux: &Tmux<ProcessRunner>) -> Result<()> {
                 "activity": s.activity_ms / 1000,
                 "path": s.path,
                 "managed_by": s.managed_by,
+                "command": s.command,
+                "title": s.title,
             })
         })
         .collect();

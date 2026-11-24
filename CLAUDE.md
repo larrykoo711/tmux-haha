@@ -13,6 +13,7 @@
 | `src/install.rs` · `src/block.rs` | `ta install` / `ta completions`; marked blocks in rc files |
 | `src/version.rs` · `src/confirm.rs` | `ta version`; asking before anything that can't be undone |
 | `src/pick/` | the picker: `app.rs` state and keys, `ui.rs` drawing, `mod.rs` terminal and event loop |
+| `src/apps.rs` | foreground app detection with preset brand colours, pane-title busy/idle activity, host-prefix stripping |
 | `src/config.rs` | `~/.config/ta/config.toml`: defaults when missing, an error naming the file when broken |
 | `src/folders.rs` | the folder tab's folders: zoxide (1 s at most), then the configured roots |
 | `src/tmux.rs` | tmux adapter: every tmux command goes through a `Runner` with a timeout |

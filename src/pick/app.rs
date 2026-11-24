@@ -175,6 +175,8 @@ pub struct App {
     /// The session (`$N`) an open menu, question or rename box is about:
     /// what it acts on, whatever row the cursor is on after a refresh.
     target: Option<String>,
+    /// This machine's `<host>_` prefix, stripped when displaying session names.
+    host_prefix: Option<String>,
     matcher: Matcher,
 }
 
@@ -220,10 +222,34 @@ impl App {
             total: 0,
             here,
             target: None,
+            host_prefix: None,
             matcher: Matcher::new(Config::DEFAULT),
         };
         app.set_sessions(sessions);
         app
+    }
+
+    /// Set the `<host>_` prefix stripped from session names when displaying
+    /// them in the picker.
+    pub fn set_host_prefix(&mut self, prefix: Option<String>) {
+        self.host_prefix = prefix.filter(|p| !p.is_empty());
+    }
+
+    /// A session name with this machine's `<host>_` prefix stripped for display.
+    pub fn display_name<'a>(&self, name: &'a str) -> &'a str {
+        crate::apps::strip_host_prefix(name, self.host_prefix.as_deref())
+    }
+
+    /// Target id (`$N` or `@N`) whose active pane should be previewed in the card.
+    pub fn selected_preview_target(&self) -> Option<String> {
+        match self.selected()? {
+            Item::Session(s) => Some(s.id),
+            Item::Window(w) => Some(w.id),
+            Item::Folder {
+                session: Some(s), ..
+            } => Some(s.id),
+            _ => None,
+        }
     }
 
     /// Replace the data, keeping the selection on the same session if it still exists.
@@ -415,9 +441,11 @@ impl App {
                         return Some((i, 0));
                     }
                     // The folder's own name, not its whole path: a fuzzy match
-                    // finds most short words somewhere in a long path.
+                    // finds most short words somewhere in a long path. Include
+                    // the normalized app label so typing `claude` or `agy` works.
                     let folder = s.path.rsplit('/').find(|p| !p.is_empty()).unwrap_or("");
-                    let text = format!("{} {folder}", s.name);
+                    let app = crate::apps::detect(&s.command, &s.title).label;
+                    let text = format!("{} {app} {folder}", s.name);
                     pattern
                         .score(Utf32Str::new(&text, &mut buf), &mut self.matcher)
                         .map(|score| (i, score))
@@ -831,6 +859,8 @@ mod tests {
             activity_ms: at,
             attached: false,
             path: path.into(),
+            command: String::new(),
+            title: String::new(),
         }
     }
 
